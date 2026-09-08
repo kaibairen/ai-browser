@@ -89,12 +89,13 @@ export async function startWorkspace() {
             savePassword: typed.length > 0,
           },
           typed,
+          { caller: 'workspace', confirmed: true },
         );
         policy.dismissSave(site.siteKey);
         policy.setSnapshot(null);
         pendingPassword = '';
         await publish();
-        return { ok: true, record: store.bubbleView(site.siteKey) };
+        return { ok: true, record: store.publicView(site.siteKey) };
       },
 
       async dismissSave() {
@@ -108,7 +109,10 @@ export async function startWorkspace() {
         const record = store.get(site.siteKey);
         if (!record) return { ok: false, error: '没有可填写的已确认身份' };
         const typed = typeof fields.password === 'string' ? fields.password : '';
-        const password = typed || store.takePasswordForFill(site.siteKey);
+        const password = typed || store.takePasswordForFill(site.siteKey, {
+          caller: 'workspace',
+          confirmed: true,
+        });
         await ensureEngine();
         await engine.fill(lastSelectors, {
           phone: record.phone,
