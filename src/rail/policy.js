@@ -1,4 +1,4 @@
-import { hostBelongsToSite } from '../sites/catalog.js';
+import { hostBelongsToSite, normalizeLoginMethod } from '../sites/catalog.js';
 
 export const NEAR_EXPIRY_DAYS = 7;
 
@@ -63,6 +63,18 @@ export function expiryMention(record, site) {
   };
 }
 
+// Current-page observation wins for loginMethod. A stored phone method
+// must not appear on the confirm card when the live page is 扫码.
+export function saveProposalFields(snapshot, record) {
+  return {
+    phone: snapshot?.phone || record?.phone || '',
+    username: snapshot?.username || record?.username || '',
+    loginMethod: normalizeLoginMethod(snapshot?.loginMethod || ''),
+    expiresAt: snapshot?.expiresAt || record?.expiresAt || '',
+    passwordPresent: Boolean(snapshot?.passwordPresent),
+  };
+}
+
 export function createSessionPolicy() {
   const dismissedSave = new Set();
   const dismissedFill = new Set();
@@ -109,7 +121,11 @@ export function createSessionPolicy() {
       const extracted =
         snapshot &&
         snapshot.siteKey === site?.siteKey &&
-        (snapshot.phone || snapshot.username || snapshot.expiresAt || snapshot.loginForm);
+        (snapshot.phone ||
+          snapshot.username ||
+          snapshot.expiresAt ||
+          snapshot.loginForm ||
+          snapshot.loginMethod);
       const differs =
         record &&
         extracted &&
@@ -125,11 +141,7 @@ export function createSessionPolicy() {
               kind: 'save',
               siteKey: site.siteKey,
               siteName: site.name,
-              phone: snapshot?.phone || record?.phone || '',
-              username: snapshot?.username || record?.username || '',
-              loginMethod: snapshot?.loginMethod || record?.loginMethod || '',
-              expiresAt: snapshot?.expiresAt || record?.expiresAt || '',
-              passwordPresent: Boolean(snapshot?.passwordPresent),
+              ...saveProposalFields(snapshot, record),
             }
           : null;
 

@@ -1,6 +1,6 @@
 import CDP from 'chrome-remote-interface';
 import { engineBounds, engineBoundsLeftOf, fitOuterBounds, RAIL_GAP } from './screen.js';
-import { FILL_SOURCE, OBSERVER_SOURCE, SNAPSHOT_SOURCE } from './observer.js';
+import { FILL_SOURCE, mergeObservationSnapshots, OBSERVER_SOURCE, SNAPSHOT_SOURCE } from './observer.js';
 import { clickPath } from '../trace.js';
 
 const HIDDEN_PREFIXES = ['devtools://', 'chrome://', 'chrome-extension://', 'edge://'];
@@ -46,6 +46,13 @@ function safeUrl(value) {
   } catch {
     return null;
   }
+}
+
+function flattenFrames(tree, acc = []) {
+  if (!tree?.frame) return acc;
+  acc.push(tree.frame);
+  for (const child of tree.childFrames || []) flattenFrames(child, acc);
+  return acc;
 }
 
 export function pickTopPage(pages, hintUrl, currentTargetId) {
@@ -587,11 +594,40 @@ export async function attachEngine(port, handlers) {
       return frameTree?.frame?.url || '';
     },
     async snapshot() {
-      const { result } = await sendToPage('Runtime.evaluate', {
-        expression: SNAPSHOT_SOURCE,
-        returnByValue: true,
-      });
-      return result?.value || null;
+      const evaluateSnapshot = async (contextId) => {
+        const params = { expression: SNAPSHOT_SOURCE, returnByValue: true };
+        if (contextId) params.contextId = contextId;
+        const { result } = await sendToPage('Runtime.evaluate', params);
+        return result?.value || null;
+      };
+
+      const top = await evaluateSnapshot();
+      if (top?.loginMethod && top?.phone) return top;
+
+      let frameTree;
+      try {
+        ({ frameTree } = await sendToPage('Page.getFrameTree'));
+      } catch {
+        return top;
+      }
+
+      const children = [];
+      const frames = flattenFrames(frameTree).filter(
+        (frame) => frame.id && frame.id !== frameTree?.frame?.id && /^https?:/i.test(frame.url || ''),
+      );
+      for (const frame of frames) {
+        try {
+          const { executionContextId } = await sendToPage('Page.createIsolatedWorld', {
+            frameId: frame.id,
+            worldName: 'ai-browser-snapshot',
+          });
+          const child = await evaluateSnapshot(executionContextId);
+          if (child) children.push(child);
+        } catch {
+          // Cross-process or gone frames stay skipped.
+        }
+      }
+      return mergeObservationSnapshots(top, children);
     },
     async fill(selectors, values) {
       const { result } = await sendToPage('Runtime.evaluate', {
