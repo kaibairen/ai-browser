@@ -64,7 +64,8 @@ export function startRailServer({ getState, actions }) {
       }
 
       if (request.method === 'POST' && url.pathname === '/confirm-fill') {
-        return json(response, 200, await actions.confirmFill());
+        const body = await readBody(request);
+        return json(response, 200, await actions.confirmFill(body));
       }
 
       if (request.method === 'POST' && url.pathname === '/dismiss-fill') {

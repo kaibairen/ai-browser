@@ -20,3 +20,15 @@ export function storePath() {
 export function secretsPath() {
   return join(dataRoot(), 'secrets.json');
 }
+
+export function cacheDir() {
+  return join(dataRoot(), 'cache');
+}
+
+export function tmpDir() {
+  return join(dataRoot(), 'tmp');
+}
+
+export function fontCacheDir() {
+  return join(cacheDir(), 'fontconfig');
+}

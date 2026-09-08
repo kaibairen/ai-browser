@@ -2,7 +2,7 @@
 
 Blank browsing computer. The workspace opens the user's local Chrome or Edge as the engine, with an independent profile, and listens to in-frame actions through CDP.
 
-The right-side hanger stays silent and sits beside the engine. It does not cover the page, steal focus, auto-navigate, or auto-submit. Same-site membership pages (for example `vip.iqiyi.com` and `www.iqiyi.com/vip/`) are one site. If the engine disconnects, status becomes not-open.
+The right-side hanger stays silent and sits beside the engine. It does not cover the page, steal focus, auto-navigate, or auto-submit. Same-site membership pages (for example `vip.iqiyi.com` and `www.iqiyi.com/vip/`) are one site. If the engine disconnects, status becomes not-open. Chrome cache and font cache live on disk under `~/.ai-browser/cache`, not `/dev/shm`.
 
 ## First slice
 

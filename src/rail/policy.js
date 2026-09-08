@@ -135,10 +135,11 @@ export function createSessionPolicy() {
 
       const fill =
         record &&
-        snapshot &&
-        snapshot.siteKey === site?.siteKey &&
-        !dismissedFill.has(site?.siteKey) &&
-        snapshot.loginForm
+        site?.siteKey &&
+        !dismissedFill.has(site.siteKey) &&
+        (snapshot?.loginForm ||
+          record.passwordStored ||
+          isMembershipPage(site, url))
           ? {
               kind: 'fill',
               siteKey: site.siteKey,

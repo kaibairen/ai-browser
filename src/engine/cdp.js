@@ -17,6 +17,19 @@ function isUsablePage(info) {
   return !HIDDEN_PREFIXES.some((prefix) => url.startsWith(prefix));
 }
 
+function hostsMatch(expected, current) {
+  try {
+    const want = new URL(expected);
+    const got = new URL(current);
+    const strip = (host) => host.replace(/^www\./, '').toLowerCase();
+    const a = strip(want.hostname);
+    const b = strip(got.hostname);
+    return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+  } catch {
+    return Boolean(current) && current.includes(expected);
+  }
+}
+
 async function connectBrowser(port) {
   const version = await CDP.Version({ host: '127.0.0.1', port });
   return CDP({
@@ -24,6 +37,32 @@ async function connectBrowser(port) {
     port,
     target: version.webSocketDebuggerUrl,
   });
+}
+
+export async function placeWindow(port, bounds) {
+  const browser = await connectBrowser(port);
+  try {
+    const { targetInfos } = await browser.Target.getTargets();
+    const page = targetInfos.find((info) => info.type === 'page');
+    if (!page) return;
+    const { windowId } = await browser.Browser.getWindowForTarget({
+      targetId: page.targetId,
+    });
+    await browser.Browser.setWindowBounds({
+      windowId,
+      bounds: { windowState: 'normal' },
+    });
+    await browser.Browser.setWindowBounds({
+      windowId,
+      bounds: { ...bounds, windowState: 'normal' },
+    });
+  } finally {
+    try {
+      await browser.close();
+    } catch {
+      // Placement connection is disposable.
+    }
+  }
 }
 
 export async function attachEngine(port, handlers) {
@@ -132,19 +171,17 @@ export async function attachEngine(port, handlers) {
   });
 
   browser.on('Target.targetDestroyed', (params) => {
-    if (params.targetId !== pageTargetId) return;
-    pageSessionId = null;
-    pageTargetId = null;
-    listPages()
-      .then((pages) => {
-        if (pages.length === 0) handleDisconnect();
-      })
-      .catch(() => handleDisconnect());
+    if (params.targetId === pageTargetId) {
+      pageSessionId = null;
+      pageTargetId = null;
+    }
   });
 
   browser.on('Target.targetInfoChanged', (params) => {
     const info = params.targetInfo;
     if (!isUsablePage(info) || !info.url) return;
+    if (pageTargetId && info.targetId !== pageTargetId) return;
+    if (!/^https?:/.test(info.url) && info.url !== 'about:blank') return;
     handlers.onNavigate?.(info.url);
   });
 
@@ -183,11 +220,7 @@ export async function attachEngine(port, handlers) {
       const { windowId, bounds } = await Browser.getWindowForTarget({
         targetId: pageTargetId,
       });
-      const measured = {
-        width: Math.max(screen.width, bounds.width || 0),
-        height: Math.max(screen.height, bounds.height || 0),
-      };
-      const next = engineBounds(measured);
+      const next = engineBounds(screen);
       if (bounds.windowState && bounds.windowState !== 'normal') {
         await Browser.setWindowBounds({
           windowId,
@@ -198,7 +231,7 @@ export async function attachEngine(port, handlers) {
         windowId,
         bounds: { ...next, windowState: 'normal' },
       });
-      return measured;
+      return screen;
     },
     async navigate(url) {
       try {
@@ -214,6 +247,22 @@ export async function attachEngine(port, handlers) {
         });
         await prepareSession(attached.sessionId, created.targetId);
       }
+    },
+    async navigateAndWait(url, timeoutMs = 8000) {
+      await this.navigate(url);
+      const deadline = Date.now() + timeoutMs;
+      let last = '';
+      while (Date.now() < deadline) {
+        if (closed) throw new Error('WebSocket connection closed');
+        try {
+          last = await this.currentUrl();
+          if (last && hostsMatch(url, last)) return last;
+        } catch (error) {
+          if (isCdpDisconnect(error)) throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      return last || url;
     },
     async currentUrl() {
       const { frameTree } = await sendToPage('Page.getFrameTree');

@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
-import { engineProfileDir, railProfileDir } from '../paths.js';
+import { cacheDir, engineProfileDir, fontCacheDir, railProfileDir, tmpDir } from '../paths.js';
 import { detectScreen, engineBounds, railBounds } from './screen.js';
+import { placeWindow } from './cdp.js';
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -22,36 +23,56 @@ export async function waitForCdp(port, timeoutMs = 20000) {
       const response = await fetch(`http://127.0.0.1:${port}/json/version`);
       if (response.ok) return await response.json();
     } catch {
-      // Engine process is still coming up.
+      // Process is still coming up.
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  throw new Error(`Engine CDP did not come up on port ${port}`);
+  throw new Error(`CDP did not come up on port ${port}`);
 }
 
-async function killPrevious(profile) {
+async function killPidFile(profile) {
   try {
     const pid = Number(await readFile(`${profile}.pid`, 'utf8'));
     if (pid) process.kill(pid, 'SIGTERM');
   } catch {
     // No previous pid, or already gone.
   }
-  if (process.platform === 'win32') return;
-  await new Promise((resolve) => {
-    const child = spawn('pkill', ['-f', profile], { stdio: 'ignore' });
-    child.on('exit', () => resolve());
-    child.on('error', () => resolve());
-  });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+}
+
+async function chromeEnv() {
+  const cache = cacheDir();
+  const fonts = fontCacheDir();
+  const tmp = tmpDir();
+  await mkdir(fonts, { recursive: true });
+  await mkdir(tmp, { recursive: true });
+  await mkdir(`${cache}/disk`, { recursive: true });
+  return {
+    ...process.env,
+    XDG_CACHE_HOME: cache,
+    FONTCONFIG_CACHE: fonts,
+    TMPDIR: tmp,
+    TEMP: tmp,
+    TMP: tmp,
+  };
 }
 
 function chromeArgs({ profile, port, bounds, appUrl, startUrl }) {
   const args = [
     `--user-data-dir=${profile}`,
+    `--disk-cache-dir=${cacheDir()}/disk`,
+    '--disk-cache-size=16777216',
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-sync',
     '--disable-session-crashed-bubble',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--disable-features=TranslateUI,MediaRouter,Vulkan,OptimizationHints',
+    '--disable-site-isolation-trials',
+    '--disable-background-networking',
+    '--disable-client-side-phishing-detection',
+    '--disable-default-apps',
+    '--font-render-hinting=none',
     `--window-position=${bounds.left},${bounds.top}`,
     `--window-size=${bounds.width},${bounds.height}`,
   ];
@@ -70,12 +91,13 @@ function chromeArgs({ profile, port, bounds, appUrl, startUrl }) {
 export async function launchEngine(binary, startUrl = 'about:blank') {
   const profile = engineProfileDir();
   await mkdir(profile, { recursive: true });
-  await killPrevious(profile);
+  await killPidFile(profile);
   const port = await freePort();
   const screen = await detectScreen();
   const bounds = engineBounds(screen);
   const child = spawn(binary, chromeArgs({ profile, port, bounds, startUrl }), {
     stdio: 'ignore',
+    env: await chromeEnv(),
   });
   await writeFile(`${profile}.pid`, String(child.pid || ''), 'utf8');
   await waitForCdp(port);
@@ -85,11 +107,19 @@ export async function launchEngine(binary, startUrl = 'about:blank') {
 export async function launchRailWindow(binary, railUrl, screen) {
   const profile = railProfileDir();
   await mkdir(profile, { recursive: true });
-  await killPrevious(profile);
+  await killPidFile(profile);
   const bounds = railBounds(screen || (await detectScreen()));
-  const child = spawn(binary, chromeArgs({ profile, bounds, appUrl: railUrl }), {
+  const port = await freePort();
+  const child = spawn(binary, chromeArgs({ profile, port, bounds, appUrl: railUrl }), {
     stdio: 'ignore',
+    env: await chromeEnv(),
   });
   await writeFile(`${profile}.pid`, String(child.pid || ''), 'utf8');
-  return { pid: child.pid, profile, child };
+  await waitForCdp(port);
+  try {
+    await placeWindow(port, bounds);
+  } catch {
+    // Window may already be in the right place.
+  }
+  return { port, pid: child.pid, profile, child, bounds };
 }

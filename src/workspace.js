@@ -22,7 +22,9 @@ export async function startWorkspace() {
   let pendingPassword = '';
   let snapTimer = null;
   let railWindow = null;
+  let railRestarts = 0;
   let screen = await detectScreen();
+  let versionMisses = 0;
 
   const currentSite = () => describeSite(engineUrl);
 
@@ -53,22 +55,9 @@ export async function startWorkspace() {
           return { ok: false, error: '需要网址，或爱奇艺这样的已知站点' };
         }
         try {
-          if (!engine?.connected || engineStatus === 'not-open') {
-            await relaunchEngine(resolved.url);
-          } else {
-            await engine.navigate(resolved.url);
-            engineUrl = resolved.url;
-            await engine.focusEngine();
-          }
-          await publish();
-          return { ok: true, url: resolved.url };
+          const opened = await openInEngine(resolved.url);
+          return { ok: true, url: opened };
         } catch (error) {
-          if (isCdpDisconnect(error)) {
-            markNotOpen();
-            await relaunchEngine(resolved.url);
-            await publish();
-            return { ok: true, url: resolved.url };
-          }
           return { ok: false, error: error.message };
         }
       },
@@ -76,9 +65,7 @@ export async function startWorkspace() {
       async confirmSave(fields) {
         const site = currentSite();
         if (!site.siteKey) return { ok: false, error: '当前页没有站点键' };
-        const snapshot = policy.getSnapshot();
-        const password =
-          fields.savePassword && snapshot?.passwordPresent ? pendingPassword : '';
+        const typed = typeof fields.password === 'string' ? fields.password : '';
         await store.confirmWrite(
           site.siteKey,
           {
@@ -86,9 +73,9 @@ export async function startWorkspace() {
             username: fields.username || '',
             loginMethod: fields.loginMethod || '',
             expiresAt: fields.expiresAt || '',
-            savePassword: Boolean(fields.savePassword && password),
+            savePassword: typed.length > 0,
           },
-          password,
+          typed,
         );
         policy.dismissSave(site.siteKey);
         policy.setSnapshot(null);
@@ -103,13 +90,13 @@ export async function startWorkspace() {
         return { ok: true };
       },
 
-      async confirmFill() {
+      async confirmFill(fields = {}) {
         const site = currentSite();
         const record = store.get(site.siteKey);
-        if (!record || !engine?.connected) {
-          return { ok: false, error: '没有可填写的已确认身份' };
-        }
-        const password = store.takePasswordForFill(site.siteKey);
+        if (!record) return { ok: false, error: '没有可填写的已确认身份' };
+        const typed = typeof fields.password === 'string' ? fields.password : '';
+        const password = typed || store.takePasswordForFill(site.siteKey);
+        await ensureEngine();
         await engine.fill(lastSelectors, {
           phone: record.phone,
           username: record.username,
@@ -118,7 +105,7 @@ export async function startWorkspace() {
         policy.dismissFill(site.siteKey);
         await engine.focusEngine();
         await publish();
-        return { ok: true };
+        return { ok: true, filled: true, submitted: false };
       },
 
       async dismissFill() {
@@ -128,28 +115,19 @@ export async function startWorkspace() {
       },
 
       async openCancel() {
-        const mention = policy.consumeMention();
-        if (!mention?.cancelUrl) {
+        const mention = policy.peekMention() || policy.consumeMention();
+        const cancelUrl = mention?.cancelUrl;
+        if (!cancelUrl) {
           await publish();
           return { ok: false, error: '没有可打开的取消页' };
         }
+        policy.consumeMention();
         if (mention.siteKey && mention.expiresAt) {
           await store.markExpiryMentioned(mention.siteKey, mention.expiresAt);
         }
-        try {
-          if (!engine?.connected || engineStatus === 'not-open') {
-            await relaunchEngine(mention.cancelUrl);
-          } else {
-            await engine.navigate(mention.cancelUrl);
-            await engine.focusEngine();
-          }
-        } catch (error) {
-          if (!isCdpDisconnect(error)) throw error;
-          markNotOpen();
-          await relaunchEngine(mention.cancelUrl);
-        }
+        const opened = await openInEngine(cancelUrl);
         await publish();
-        return { ok: true, url: mention.cancelUrl };
+        return { ok: true, url: opened };
       },
 
       async dismissMention() {
@@ -211,13 +189,14 @@ export async function startWorkspace() {
   function bindEngine(next) {
     engine = next;
     engineStatus = next.connected ? 'running' : 'not-open';
+    versionMisses = 0;
     return next;
   }
 
   async function connectEngine(port, startUrl) {
     const attached = await attachEngine(port, {
       onNavigate(url) {
-        if (!url) return;
+        if (!url || url === engineUrl) return;
         engineUrl = url;
         policy.setSnapshot(null);
         pendingPassword = '';
@@ -244,7 +223,7 @@ export async function startWorkspace() {
       },
     });
     bindEngine(attached);
-    engineUrl = startUrl || engineUrl;
+    if (startUrl) engineUrl = startUrl;
     try {
       screen = await attached.layoutLeftOfRail(screen);
     } catch (error) {
@@ -268,6 +247,53 @@ export async function startWorkspace() {
     if (engine?.connected) await engine.focusEngine();
   }
 
+  async function ensureEngine(startUrl) {
+    if (engine?.connected && engineStatus !== 'not-open') return;
+    await relaunchEngine(startUrl || engineUrl || 'about:blank');
+  }
+
+  async function openInEngine(url) {
+    engineUrl = url;
+    try {
+      if (!engine?.connected || engineStatus === 'not-open') {
+        await relaunchEngine(url);
+      } else {
+        const opened = await engine.navigateAndWait(url);
+        engineUrl = opened || url;
+        await engine.focusEngine();
+      }
+    } catch (error) {
+      if (!isCdpDisconnect(error)) throw error;
+      markNotOpen();
+      await relaunchEngine(url);
+    }
+    if (!engine?.connected) {
+      await relaunchEngine(url);
+    }
+    try {
+      const current = await engine.currentUrl();
+      if (current) engineUrl = current;
+    } catch (error) {
+      if (isCdpDisconnect(error)) {
+        markNotOpen();
+        await relaunchEngine(url);
+      }
+    }
+    await publish();
+    return engineUrl;
+  }
+
+  async function ensureRail() {
+    if (railRestarts > 8) return;
+    railWindow = await launchRailWindow(located.binary, railUrl, screen);
+    railWindow.child?.on('exit', () => {
+      railRestarts += 1;
+      setTimeout(() => {
+        ensureRail().catch(() => {});
+      }, 600);
+    });
+  }
+
   const railPort = await rail.listen();
   const railUrl = `http://127.0.0.1:${railPort}/`;
 
@@ -278,17 +304,27 @@ export async function startWorkspace() {
     if (!isCdpDisconnect(error)) throw error;
     markNotOpen();
   }
-  railWindow = await launchRailWindow(located.binary, railUrl, screen);
+  await ensureRail();
   if (engine?.connected) await engine.focusEngine();
   await publish();
 
   setInterval(() => {
-    if (engineStatus === 'not-open' || !launched?.port) return;
+    if (engineStatus === 'not-open' || !launched?.port) {
+      versionMisses = 0;
+      return;
+    }
     fetch(`http://127.0.0.1:${launched.port}/json/version`)
       .then((response) => {
-        if (!response.ok) markNotOpen();
+        if (response.ok) versionMisses = 0;
+        else {
+          versionMisses += 1;
+          if (versionMisses >= 3) markNotOpen();
+        }
       })
-      .catch(() => markNotOpen());
+      .catch(() => {
+        versionMisses += 1;
+        if (versionMisses >= 3) markNotOpen();
+      });
   }, 2000);
 
   const shutdown = async () => {

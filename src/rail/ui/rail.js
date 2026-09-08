@@ -51,8 +51,7 @@ function render(state) {
         ${field('username', '用户名', p.username)}
         ${field('loginMethod', '登录方式', p.loginMethod)}
         ${field('expiresAt', '到期日', p.expiresAt, 'date')}
-        <p class="muted password">${p.passwordPresent ? '密码（可选，明文不会出现在这里）' : ''}</p>
-        ${p.passwordPresent ? '<label><input name="savePassword" type="checkbox" /> 同时保存密码</label>' : ''}
+        <label><span>密码（可选，不会以明文显示）</span><input name="password" type="password" autocomplete="new-password" /></label>
         <div class="row">
           <button type="button" class="primary" data-action="confirm-save">确认写入</button>
           <button type="button" data-action="dismiss-save">不保存</button>
@@ -69,6 +68,7 @@ function render(state) {
         <p>用户名 ${escapeText(p.username || '—')}</p>
         <p>登录方式 ${escapeText(p.loginMethod || '—')}</p>
         <p class="password">${p.passwordStored ? '••••••••' : ''}</p>
+        <label><span>填写密码到页面（不提交，不以明文回显）</span><input name="fillPassword" type="password" autocomplete="off" /></label>
         <div class="row">
           <button type="button" class="primary" data-action="confirm-fill">确认填写</button>
           <button type="button" data-action="dismiss-fill">不填写</button>
@@ -113,8 +113,14 @@ surface.addEventListener('click', async (event) => {
       username: data.username,
       loginMethod: data.loginMethod,
       expiresAt: data.expiresAt,
-      savePassword: Boolean(data.savePassword),
+      password: data.password || '',
     });
+    return;
+  }
+  if (action === 'confirm-fill') {
+    const card = event.target.closest('article');
+    const passwordEl = card?.querySelector('input[name="fillPassword"]');
+    await post('/confirm-fill', { password: passwordEl?.value || '' });
     return;
   }
   await post(`/${action}`);
@@ -123,7 +129,10 @@ surface.addEventListener('click', async (event) => {
 async function boot() {
   render(await (await fetch('/state')).json());
   const stream = new EventSource('/events');
-  stream.onmessage = (event) => render(JSON.parse(event.data));
+  stream.onmessage = (event) => {
+    if (document.activeElement && document.activeElement.type === 'password') return;
+    render(JSON.parse(event.data));
+  };
 }
 
 boot();

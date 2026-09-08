@@ -58,10 +58,12 @@ export function engineBounds(screen) {
 }
 
 export function railBounds(screen) {
+  const width = Math.min(RAIL_WIDTH, Math.max(240, screen.width - 40));
+  const left = Math.max(0, Math.min(screen.width - width, engineBounds(screen).width + RAIL_GAP));
   return {
-    left: screen.width - RAIL_WIDTH,
-    top: Math.max(24, Math.round(screen.height * 0.08)),
-    width: RAIL_WIDTH,
-    height: Math.min(RAIL_HEIGHT, Math.max(320, screen.height - 72)),
+    left,
+    top: Math.max(16, Math.min(48, Math.round(screen.height * 0.06))),
+    width,
+    height: Math.min(RAIL_HEIGHT, Math.max(320, screen.height - 64)),
   };
 }
