@@ -58,6 +58,20 @@ function computerLine(state) {
   }
 }
 
+function mentionSentence(mention) {
+  const siteName = String(mention?.siteName || '').trim();
+  const expiresAt = String(mention?.expiresAt || '').trim();
+  if (siteName && expiresAt) return `${siteName}会员将于 ${expiresAt} 到期`;
+  return String(mention?.text || '')
+    .replace(/\s*·\s*https?:\/\/\S+/g, '')
+    .trim();
+}
+
+function keepWindowTitle() {
+  document.title = '左侧打开';
+  if (expandButton) expandButton.textContent = '左侧打开';
+}
+
 function railBox(width, height) {
   const margin = 16;
   const slack = 28;
@@ -86,7 +100,7 @@ function fitRailWindow(state, force = false) {
     window.resizeTo(box.width, box.height);
     window.moveTo(box.left, box.top);
   } catch {
-    // App windows usually allow this; CDP placement is the backup.
+    // The slot stays on screen via this window; existing collapse/expand actions place it.
   }
 }
 
@@ -102,11 +116,10 @@ function releaseFocus() {
 
 function setCollapsed(next) {
   collapsed = Boolean(next);
-  document.title = '左侧打开';
+  keepWindowTitle();
   document.body.classList.toggle('collapsed', collapsed);
   if (expandButton) {
     expandButton.hidden = !collapsed;
-    expandButton.textContent = '左侧打开';
   }
   lastBoxKey = '';
   fitRailWindow(lastState, true);
@@ -123,12 +136,14 @@ function renderMention(mention) {
   }
   const url = mention.cancelUrl || DEFAULT_CANCEL;
   if (cancelUrl.value !== url) cancelUrl.value = url;
-  if (mentionButton.textContent !== mention.text) mentionButton.textContent = mention.text;
+  const sentence = mentionSentence(mention);
+  if (mentionButton.textContent !== sentence) mentionButton.textContent = sentence;
   cancelForm.hidden = false;
 }
 
 function render(state) {
   lastState = state;
+  keepWindowTitle();
   if (computerStatus) computerStatus.textContent = computerLine(state);
   const parts = [];
   if (state.proposal?.kind === 'save') {
@@ -156,7 +171,7 @@ function render(state) {
         <p>手机 ${escapeText(p.phone || '—')}</p>
         <p>用户名 ${escapeText(p.username || '—')}</p>
         <p>登录方式 ${escapeText(p.loginMethod || '—')}</p>
-        <p class="password">${p.passwordStored ? '••••••••' : ''}</p>
+        ${p.passwordStored ? '<p class="password">••••••••</p>' : ''}
         <label><span>填写密码到页面（不提交，不以明文回显）</span><input name="fillPassword" type="password" autocomplete="off" /></label>
         <div class="row">
           <button type="button" class="primary" data-action="confirm-fill">确认填写</button>
@@ -310,7 +325,7 @@ surface.addEventListener('click', async (event) => {
 });
 
 async function boot() {
-  document.title = '左侧打开';
+  keepWindowTitle();
   document.body.tabIndex = -1;
   let launchGuard = true;
   input.addEventListener('pointerdown', () => {

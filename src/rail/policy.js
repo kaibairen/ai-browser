@@ -59,7 +59,7 @@ export function expiryMention(record, site) {
     siteName: site.name,
     expiresAt: record.expiresAt,
     cancelUrl: site.cancelUrl,
-    text: `${site.name}会员将于 ${record.expiresAt} 到期 · ${site.cancelUrl}`,
+    text: `${site.name}会员将于 ${record.expiresAt} 到期`,
   };
 }
 
