@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Blank browsing computer: workspace opens a local Chrome or Edge engine with its own profile.",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
     "node": ">=20"

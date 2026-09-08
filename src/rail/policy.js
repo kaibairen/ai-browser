@@ -1,4 +1,14 @@
-import { hostBelongsToSite } from '../sites/catalog.js';
+import { displayLoginMethod, hostBelongsToSite, normalizeLoginMethod } from '../sites/catalog.js';
+
+export function phoneForSaveProposal(snapshot, record) {
+  return snapshot?.phone || record?.phone || '';
+}
+
+export function loginMethodForSaveProposal(snapshot, record) {
+  const fromPage = snapshot?.loginMethod || '';
+  if (fromPage) return displayLoginMethod(fromPage);
+  return displayLoginMethod(record?.loginMethod || '');
+}
 
 export const NEAR_EXPIRY_DAYS = 7;
 
@@ -109,14 +119,19 @@ export function createSessionPolicy() {
       const extracted =
         snapshot &&
         snapshot.siteKey === site?.siteKey &&
-        (snapshot.phone || snapshot.username || snapshot.expiresAt || snapshot.loginForm);
+        (snapshot.phone ||
+          snapshot.username ||
+          snapshot.expiresAt ||
+          snapshot.loginForm ||
+          snapshot.loginMethod);
       const differs =
         record &&
         extracted &&
         ((snapshot.phone && snapshot.phone !== record.phone) ||
           (snapshot.username && snapshot.username !== record.username) ||
           (snapshot.expiresAt && snapshot.expiresAt !== record.expiresAt) ||
-          (snapshot.loginMethod && snapshot.loginMethod !== record.loginMethod));
+          (snapshot.loginMethod &&
+            normalizeLoginMethod(snapshot.loginMethod) !== normalizeLoginMethod(record.loginMethod)));
       const save =
         site?.siteKey &&
         !dismissedSave.has(site.siteKey) &&
@@ -125,9 +140,9 @@ export function createSessionPolicy() {
               kind: 'save',
               siteKey: site.siteKey,
               siteName: site.name,
-              phone: snapshot?.phone || record?.phone || '',
+              phone: phoneForSaveProposal(snapshot, record),
               username: snapshot?.username || record?.username || '',
-              loginMethod: snapshot?.loginMethod || record?.loginMethod || '',
+              loginMethod: loginMethodForSaveProposal(snapshot, record),
               expiresAt: snapshot?.expiresAt || record?.expiresAt || '',
               passwordPresent: Boolean(snapshot?.passwordPresent),
             }

@@ -162,6 +162,11 @@ export function isQrLogin(value) {
   return normalizeLoginMethod(value) === LOGIN_METHODS.qr;
 }
 
+export function displayLoginMethod(value) {
+  if (!value) return '';
+  return isQrLogin(value) ? '扫码' : String(value);
+}
+
 export function resolveOpenInput(input) {
   const raw = String(input || '').trim();
   if (!raw) return null;
