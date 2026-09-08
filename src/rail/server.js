@@ -2,6 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { clickPath } from '../trace.js';
 
 const UI_DIR = fileURLToPath(new URL('./ui/', import.meta.url));
 const TYPES = {
@@ -21,8 +22,17 @@ function json(response, status, body) {
 async function readBody(request) {
   const chunks = [];
   for await (const chunk of request) chunks.push(chunk);
-  if (!chunks.length) return {};
-  return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+  const raw = Buffer.concat(chunks).toString('utf8');
+  if (!raw) return {};
+  const type = String(request.headers['content-type'] || '');
+  if (type.includes('application/x-www-form-urlencoded')) {
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return Object.fromEntries(new URLSearchParams(raw));
+  }
 }
 
 export function startRailServer({ getState, actions }) {
@@ -72,8 +82,20 @@ export function startRailServer({ getState, actions }) {
         return json(response, 200, await actions.dismissFill());
       }
 
+      if (request.method === 'POST' && url.pathname === '/click-trace') {
+        const body = await readBody(request);
+        await clickPath(body.stage || 'rail', body);
+        return json(response, 200, { ok: true });
+      }
+
       if (request.method === 'POST' && url.pathname === '/open-cancel') {
-        return json(response, 200, await actions.openCancel());
+        const body = await readBody(request);
+        await clickPath('http-open-cancel', {
+          contentType: request.headers['content-type'] || '',
+          url: body.url || '',
+        });
+        const result = await actions.openCancel(body);
+        return json(response, result.ok ? 200 : 400, result);
       }
 
       if (request.method === 'POST' && url.pathname === '/dismiss-mention') {

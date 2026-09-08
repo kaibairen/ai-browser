@@ -34,10 +34,27 @@ body {
   flex: none;
 }
 
-button.mention {
+#cancel-form {
+  padding: 10px 10px 0;
+}
+
+#cancel-form[hidden] {
+  display: none;
+}
+
+#cancel-form #mention {
   display: block;
   width: 100%;
   text-align: left;
+}
+
+#cancel-nav {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  left: -9999px;
+  border: 0;
+  opacity: 0;
 }
 
 #engine-status {

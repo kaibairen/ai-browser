@@ -2,6 +2,9 @@ const surface = document.getElementById('surface');
 const form = document.getElementById('open-form');
 const input = document.getElementById('open-input');
 const engineStatus = document.getElementById('engine-status');
+const cancelForm = document.getElementById('cancel-form');
+const cancelUrl = document.getElementById('cancel-url');
+const mentionButton = document.getElementById('mention');
 
 async function post(path, body) {
   const response = await fetch(path, {
@@ -30,6 +33,19 @@ function field(name, label, value, type = 'text') {
   return `<label><span>${label}</span><input name="${name}" type="${type}" value="${escapeAttr(value)}" /></label>`;
 }
 
+function renderMention(mention) {
+  if (!cancelForm || !mentionButton || !cancelUrl) return;
+  if (!mention) {
+    cancelForm.hidden = true;
+    mentionButton.textContent = '';
+    return;
+  }
+  const url = mention.cancelUrl || 'https://vip.iqiyi.com/';
+  if (cancelUrl.value !== url) cancelUrl.value = url;
+  if (mentionButton.textContent !== mention.text) mentionButton.textContent = mention.text;
+  cancelForm.hidden = false;
+}
+
 function render(state) {
   if (engineStatus) {
     const closed = state.engine?.status === 'not-open';
@@ -37,11 +53,6 @@ function render(state) {
     engineStatus.textContent = closed ? '引擎未打开' : '';
   }
   const parts = [];
-  if (state.mention) {
-    parts.push(
-      `<button type="button" class="card mention" data-action="open-cancel" onpointerdown="window.__aiOpenCancel(event)" onclick="window.__aiOpenCancel(event)">${escapeText(state.mention.text)}</button>`,
-    );
-  }
   if (state.proposal?.kind === 'save') {
     const p = state.proposal;
     parts.push(`
@@ -83,7 +94,6 @@ function render(state) {
 }
 
 let opening = false;
-let canceling = false;
 
 async function submitOpen() {
   const value = input.value.trim();
@@ -105,17 +115,27 @@ function isEnterKey(event) {
   );
 }
 
-window.__aiOpenCancel = (event) => {
-  if (event) {
-    event.preventDefault();
-    event.stopPropagation();
-  }
-  if (canceling) return;
-  canceling = true;
-  post('/open-cancel').finally(() => {
-    canceling = false;
+function traceClick(stage, extra) {
+  post('/click-trace', {
+    stage,
+    url: cancelUrl?.value || 'https://vip.iqiyi.com/',
+    ...extra,
+  }).catch(() => {});
+}
+
+if (cancelForm) {
+  cancelForm.addEventListener('submit', () => {
+    const url = cancelUrl?.value || 'https://vip.iqiyi.com/';
+    traceClick('form-submit', { url });
+    post('/open-cancel', { url }).catch(() => {});
   });
-};
+}
+
+if (mentionButton) {
+  mentionButton.addEventListener('click', () => {
+    traceClick('mention-click');
+  });
+}
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -135,21 +155,9 @@ document.addEventListener(
   true,
 );
 
-document.addEventListener(
-  'pointerdown',
-  (event) => {
-    const button = event.target.closest('[data-action="open-cancel"]');
-    if (!button) return;
-    event.preventDefault();
-    event.stopPropagation();
-    window.__aiOpenCancel(event);
-  },
-  true,
-);
-
 surface.addEventListener('click', async (event) => {
   const action = event.target.closest('[data-action]')?.dataset.action;
-  if (!action || action === 'open-cancel') return;
+  if (!action) return;
   if (action === 'confirm-save') {
     const card = surface.querySelector('[data-kind="save"]');
     const data = {};
@@ -175,11 +183,15 @@ surface.addEventListener('click', async (event) => {
 });
 
 async function boot() {
-  render(await (await fetch('/state')).json());
+  const state = await (await fetch('/state')).json();
+  renderMention(state.mention);
+  render(state);
   const stream = new EventSource('/events');
   stream.onmessage = (event) => {
+    const next = JSON.parse(event.data);
+    renderMention(next.mention);
     if (document.activeElement && document.activeElement.type === 'password') return;
-    render(JSON.parse(event.data));
+    render(next);
   };
 }
 

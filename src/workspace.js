@@ -6,6 +6,17 @@ import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
 import { startRailServer } from './rail/server.js';
 import { describeSite, describeSiteKey, resolveOpenInput } from './sites/catalog.js';
+import { clickPath } from './trace.js';
+
+function httpUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol === 'https:' || url.protocol === 'http:') return url.href;
+  } catch {
+    // Ignore non-URLs.
+  }
+  return '';
+}
 
 export async function startWorkspace() {
   const store = createSiteStore();
@@ -23,6 +34,7 @@ export async function startWorkspace() {
   let snapTimer = null;
   let railWindow = null;
   let railRestarts = 0;
+  let openCancelInFlight = null;
   let screen = await detectScreen();
   let versionMisses = 0;
 
@@ -114,27 +126,50 @@ export async function startWorkspace() {
         return { ok: true };
       },
 
-      async openCancel() {
+      async openCancel(body = {}) {
         const mention = policy.peekMention();
-        const cancelUrl = mention?.cancelUrl;
-        if (!cancelUrl) {
-          await publish();
-          return { ok: false, error: '没有可打开的取消页' };
+        const cancelUrl =
+          httpUrl(body.url) || httpUrl(mention?.cancelUrl) || 'https://vip.iqiyi.com/';
+        const received = {
+          bodyUrl: body.url || '',
+          mentionUrl: mention?.cancelUrl || '',
+          cancelUrl,
+          engineUrl,
+          engineStatus,
+          connected: Boolean(engine?.connected),
+        };
+        if (openCancelInFlight) {
+          clickPath('open-cancel-join', received);
+          return openCancelInFlight;
         }
-        if (engine?.connected) {
-          await engine.navigate(cancelUrl);
-        }
-        const opened = await openInEngine(cancelUrl);
-        if (!originsMatch(cancelUrl, opened)) {
-          await publish();
-          return { ok: false, error: `引擎仍在 ${opened}`, url: opened };
-        }
-        policy.consumeMention();
-        if (mention.siteKey && mention.expiresAt) {
-          await store.markExpiryMentioned(mention.siteKey, mention.expiresAt);
-        }
-        await publish();
-        return { ok: true, url: opened };
+        openCancelInFlight = (async () => {
+          await clickPath('open-cancel-received', received);
+          try {
+            const opened = await openInEngine(cancelUrl);
+            await clickPath('open-cancel-reached', { cancelUrl, opened });
+            if (!originsMatch(cancelUrl, opened)) {
+              await publish();
+              return { ok: false, error: `引擎仍在 ${opened}`, url: opened };
+            }
+            policy.consumeMention();
+            if (mention?.siteKey && mention.expiresAt) {
+              await store.markExpiryMentioned(mention.siteKey, mention.expiresAt);
+            }
+            await publish();
+            return { ok: true, url: opened };
+          } catch (error) {
+            await clickPath('open-cancel-failed', {
+              cancelUrl,
+              error: error.message,
+              engineUrl,
+            });
+            await publish();
+            return { ok: false, error: error.message, url: engineUrl };
+          } finally {
+            openCancelInFlight = null;
+          }
+        })();
+        return openCancelInFlight;
       },
 
       async dismissMention() {
@@ -260,25 +295,26 @@ export async function startWorkspace() {
   }
 
   async function openInEngine(url) {
+    const hintUrl = engineUrl;
     try {
       if (!engine?.connected || engineStatus === 'not-open') {
         await relaunchEngine(url);
         const opened = await engine.waitForOrigin(url, 10000);
         if (!originsMatch(url, opened)) {
-          const reached = await engine.navigateAndWait(url);
+          const reached = await engine.navigateAndWait(url, 10000, hintUrl);
           engineUrl = reached;
         } else {
           engineUrl = opened;
         }
       } else {
-        engineUrl = await engine.navigateAndWait(url);
+        engineUrl = await engine.navigateAndWait(url, 10000, hintUrl);
         await engine.focusEngine();
       }
     } catch (error) {
       if (!isCdpDisconnect(error)) throw error;
       markNotOpen();
       await relaunchEngine(url);
-      engineUrl = await engine.navigateAndWait(url);
+      engineUrl = await engine.navigateAndWait(url, 10000, hintUrl);
     }
     if (!originsMatch(url, engineUrl)) {
       throw new Error(`engine stayed on ${engineUrl}`);

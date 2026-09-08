@@ -1,6 +1,7 @@
 import CDP from 'chrome-remote-interface';
 import { engineBounds } from './screen.js';
 import { FILL_SOURCE, OBSERVER_SOURCE, SNAPSHOT_SOURCE } from './observer.js';
+import { clickPath } from '../trace.js';
 
 const HIDDEN_PREFIXES = ['devtools://', 'chrome://', 'chrome-extension://', 'edge://'];
 
@@ -23,6 +24,51 @@ export function originsMatch(expected, current) {
   } catch {
     return false;
   }
+}
+
+function safeUrl(value) {
+  try {
+    return new URL(value);
+  } catch {
+    return null;
+  }
+}
+
+export function pickTopPage(pages, hintUrl, currentTargetId) {
+  const usable = (pages || []).filter(isUsablePage);
+  if (!usable.length) return null;
+  const httpPages = usable.filter((page) => /^https?:/i.test(page.url || ''));
+  const pool = httpPages.length ? httpPages : usable;
+  const hint = safeUrl(hintUrl);
+  let best = null;
+  let bestScore = -1;
+  for (const page of pool) {
+    let score = 0;
+    const url = page.url || '';
+    if (page.targetId && page.targetId === currentTargetId) score += 30;
+    const current = safeUrl(url);
+    if (current) {
+      if (current.protocol === 'https:') score += 8;
+      if (current.protocol === 'http:') score += 6;
+      if (hint) {
+        if (current.href.split('#')[0] === hint.href.split('#')[0]) score += 200;
+        if (current.origin === hint.origin) score += 120;
+        if (current.hostname === hint.hostname) score += 40;
+        const hintHost = hint.hostname.replace(/^www\./, '');
+        const curHost = current.hostname.replace(/^www\./, '');
+        if (curHost === hintHost || curHost.endsWith(`.${hintHost}`) || hintHost.endsWith(`.${curHost}`)) {
+          score += 25;
+        }
+      }
+    } else if (url === 'about:blank') {
+      score += 1;
+    }
+    if (score > bestScore) {
+      best = page;
+      bestScore = score;
+    }
+  }
+  return best;
 }
 
 async function connectBrowser(port) {
@@ -130,7 +176,7 @@ export async function attachEngine(port, handlers) {
     if (closed) throw new Error('WebSocket connection closed');
     if (pageSessionId) return pageSessionId;
     const pages = await listPages();
-    let page = pages[0];
+    let page = pickTopPage(pages, '', pageTargetId) || pages[0];
     if (!page) {
       const created = await Target.createTarget({ url: 'about:blank' });
       page = { targetId: created.targetId };
@@ -141,6 +187,85 @@ export async function attachEngine(port, handlers) {
     });
     await prepareSession(attached.sessionId, page.targetId);
     return pageSessionId;
+  }
+
+  async function bindTopPage(hintUrl) {
+    if (closed) throw new Error('WebSocket connection closed');
+    const pages = await listPages();
+    const chosen = pickTopPage(pages, hintUrl, pageTargetId);
+    const listed = pages.map((page) => ({
+      targetId: page.targetId,
+      url: page.url,
+      type: page.type,
+    }));
+    if (!chosen) {
+      await ensurePageSession();
+      await clickPath('bind-top-page', {
+        hintUrl,
+        chosenUrl: '',
+        targetId: pageTargetId,
+        sessionId: pageSessionId,
+        listed,
+        fallback: 'ensure-empty',
+      });
+      return {
+        sessionId: pageSessionId,
+        targetId: pageTargetId,
+        url: '',
+      };
+    }
+    const rebound = chosen.targetId !== pageTargetId || !pageSessionId;
+    if (rebound) {
+      const attached = await Target.attachToTarget({
+        targetId: chosen.targetId,
+        flatten: true,
+      });
+      await prepareSession(attached.sessionId, chosen.targetId);
+    } else {
+      await browser.send('Page.enable', {}, pageSessionId);
+      await browser.send('Runtime.enable', {}, pageSessionId);
+    }
+    try {
+      await Target.activateTarget({ targetId: chosen.targetId });
+    } catch {
+      // Activation is best-effort; navigate still uses this session.
+    }
+    await clickPath('bind-top-page', {
+      hintUrl,
+      chosenUrl: chosen.url || '',
+      targetId: chosen.targetId,
+      sessionId: pageSessionId,
+      rebound,
+      listed,
+    });
+    return {
+      sessionId: pageSessionId,
+      targetId: pageTargetId,
+      url: chosen.url || '',
+    };
+  }
+
+  async function urlOfTarget(targetId) {
+    if (pageTargetId === targetId && pageSessionId) {
+      try {
+        const evaluated = await browser.send(
+          'Runtime.evaluate',
+          { expression: 'location.href', returnByValue: true },
+          pageSessionId,
+        );
+        if (evaluated?.result?.value) return evaluated.result.value;
+      } catch {
+        // Session may still be loading.
+      }
+      try {
+        const { frameTree } = await browser.send('Page.getFrameTree', {}, pageSessionId);
+        if (frameTree?.frame?.url) return frameTree.frame.url;
+      } catch {
+        // Fall through to the target list.
+      }
+    }
+    const pages = await listPages();
+    return pages.find((info) => info.targetId === targetId)?.url || '';
   }
 
   async function sendToPage(method, params = {}) {
@@ -228,42 +353,89 @@ export async function attachEngine(port, handlers) {
       });
       return screen;
     },
-    async navigate(url) {
-      await sendToPage('Page.navigate', { url });
+    async navigate(url, hintUrl) {
+      const bound = await bindTopPage(hintUrl || '');
+      let navigateResult = null;
       try {
-        await sendToPage('Runtime.evaluate', {
-          expression: `location.assign(${JSON.stringify(url)})`,
-          userGesture: true,
+        navigateResult = await browser.send('Page.navigate', { url }, bound.sessionId);
+      } catch (error) {
+        await clickPath('page-navigate-error', {
+          url,
+          hintUrl,
+          targetId: bound.targetId,
+          sessionId: bound.sessionId,
+          boundUrl: bound.url,
+          error: error.message,
         });
-      } catch {
-        // Page.navigate is enough if evaluate is blocked.
+        throw error;
       }
+      await clickPath('page-navigate', {
+        url,
+        hintUrl,
+        targetId: bound.targetId,
+        sessionId: bound.sessionId,
+        boundUrl: bound.url,
+        frameId: navigateResult?.frameId || '',
+        loaderId: navigateResult?.loaderId || '',
+        errorText: navigateResult?.errorText || '',
+      });
+      try {
+        await browser.send(
+          'Runtime.evaluate',
+          {
+            expression: `location.assign(${JSON.stringify(url)})`,
+            userGesture: true,
+          },
+          bound.sessionId,
+        );
+        await clickPath('location-assign', {
+          url,
+          targetId: bound.targetId,
+          sessionId: bound.sessionId,
+        });
+      } catch (error) {
+        await clickPath('location-assign-skipped', {
+          url,
+          targetId: bound.targetId,
+          error: error.message,
+        });
+      }
+      return bound;
     },
-    async waitForOrigin(url, timeoutMs) {
+    async waitForOrigin(url, timeoutMs, targetId) {
       const deadline = Date.now() + timeoutMs;
       let last = '';
       while (Date.now() < deadline) {
         if (closed) throw new Error('WebSocket connection closed');
         try {
-          last = await this.currentUrl();
+          last = targetId ? await urlOfTarget(targetId) : await this.currentUrl();
           if (last && originsMatch(url, last)) return last;
         } catch (error) {
           if (isCdpDisconnect(error)) throw error;
         }
         await new Promise((resolve) => setTimeout(resolve, 150));
       }
+      await clickPath('wait-origin-timeout', {
+        url,
+        targetId: targetId || pageTargetId,
+        last,
+      });
       return last;
     },
-    async navigateAndWait(url, timeoutMs = 10000) {
-      await this.navigate(url);
-      let reached = await this.waitForOrigin(url, 4000);
+    async navigateAndWait(url, timeoutMs = 10000, hintUrl) {
+      const first = await this.navigate(url, hintUrl);
+      let reached = await this.waitForOrigin(url, 4000, first.targetId);
       if (reached) return reached;
-      await this.navigate(url);
-      reached = await this.waitForOrigin(url, timeoutMs);
+      const second = await this.navigate(url, hintUrl || first.url);
+      reached = await this.waitForOrigin(url, timeoutMs, second.targetId);
       if (reached) return reached;
       throw new Error(`engine did not reach ${url}`);
     },
     async currentUrl() {
+      if (pageTargetId) {
+        const listed = await urlOfTarget(pageTargetId);
+        if (listed) return listed;
+      }
       const { frameTree } = await sendToPage('Page.getFrameTree');
       return frameTree?.frame?.url || '';
     },
