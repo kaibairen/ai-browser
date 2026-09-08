@@ -74,6 +74,82 @@ export function resolveObservedLoginMethod({
   return '';
 }
 
+export function fieldHint(el) {
+  return [
+    el?.type || '',
+    el?.name || '',
+    el?.id || '',
+    el?.placeholder || '',
+    el?.title || '',
+    String(el?.className || ''),
+    (el && typeof el.getAttribute === 'function' && el.getAttribute('autocomplete')) || '',
+    (el && typeof el.getAttribute === 'function' && el.getAttribute('aria-label')) || '',
+  ]
+    .join(' ')
+    .toLowerCase();
+}
+
+export function isSearchInput(el) {
+  const type = String(el?.type || '').toLowerCase();
+  if (type === 'search') return true;
+  return /search|query|\bkw\b|keyword|搜[索引索]|查找/.test(fieldHint(el));
+}
+
+export function isPasswordInput(el) {
+  const type = String(el?.type || '').toLowerCase();
+  return type === 'password' || /password|pwd|密码/.test(fieldHint(el));
+}
+
+export function isPhoneInput(el) {
+  if (isSearchInput(el)) return false;
+  const type = String(el?.type || '').toLowerCase();
+  return type === 'tel' || /phone|mobile|tel|手机|电话/.test(fieldHint(el));
+}
+
+export function isUsernameInput(el) {
+  if (isSearchInput(el) || isPhoneInput(el) || isPasswordInput(el)) return false;
+  const type = String(el?.type || '').toLowerCase();
+  if (type === 'email') return true;
+  if (type !== 'text' && type !== 'email' && type !== 'number' && type !== '') return false;
+  return /user|account|nick|email|login|用户|账号|帐号|昵称/.test(fieldHint(el));
+}
+
+export function classifyInputKind(el) {
+  if (isPasswordInput(el)) return 'password';
+  if (isSearchInput(el)) return 'search';
+  if (isPhoneInput(el)) return 'phone';
+  if (isUsernameInput(el)) return 'username';
+  return 'other';
+}
+
+export function resolveFillField(kind, fields, selected) {
+  if (selected && classifyInputKind(selected) === kind) return selected;
+  return (fields || []).find((field) => classifyInputKind(field) === kind) || null;
+}
+
+export function fillIdentityFields(root, selectors = {}, values = {}) {
+  const fields = [...(root?.querySelectorAll?.('input, textarea, select') || [])];
+  const filled = [];
+  const write = (el, value, label) => {
+    if (!el || value == null || value === '') return;
+    if (typeof el.focus === 'function') el.focus();
+    el.value = value;
+    if (typeof el.dispatchEvent === 'function') {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+    filled.push(label);
+  };
+  const pick = (kind, selector) => {
+    const selected = selector && root?.querySelector ? root.querySelector(selector) : null;
+    return resolveFillField(kind, fields, selected);
+  };
+  write(pick('phone', selectors.phone), values.phone, 'phone');
+  write(pick('username', selectors.username), values.username, 'username');
+  write(pick('password', selectors.password), values.password, 'password');
+  return filled;
+}
+
 // Observation already has loginMethod. Frames only fill gaps — never
 // replace a top-level method, and never invent a new field.
 export function mergeObservationSnapshots(top, frames = []) {
@@ -118,21 +194,21 @@ export function mergeObservationSnapshots(top, frames = []) {
 
 export const SNAPSHOT_SOURCE = `(() => {
   const resolveObservedLoginMethod = ${resolveObservedLoginMethod.toString()};
-
-  const labelOf = (el) => [
-    el.type || '',
-    el.name || '',
-    el.id || '',
-    el.placeholder || '',
-    el.getAttribute('autocomplete') || '',
-    el.getAttribute('aria-label') || ''
-  ].join(' ').toLowerCase();
+  const fieldHint = ${fieldHint.toString()};
+  const isSearchInput = ${isSearchInput.toString()};
+  const isPasswordInput = ${isPasswordInput.toString()};
+  const isPhoneInput = ${isPhoneInput.toString()};
+  const isUsernameInput = ${isUsernameInput.toString()};
+  const classifyInputKind = ${classifyInputKind.toString()};
 
   const selectorOf = (el) => {
     if (el.id) return '#' + CSS.escape(el.id);
     if (el.name) return el.tagName.toLowerCase() + '[name="' + el.name.replace(/"/g, '') + '"]';
-    if (el.type) return 'input[type="' + el.type + '"]';
-    return el.tagName.toLowerCase();
+    const placeholder = el.placeholder || '';
+    if (placeholder) return 'input[placeholder="' + placeholder.replace(/"/g, '') + '"]';
+    const type = String(el.type || '').toLowerCase();
+    if (type && type !== 'text') return 'input[type="' + type + '"]';
+    return '';
   };
 
   const isVisible = (el) => {
@@ -169,11 +245,11 @@ export const SNAPSHOT_SOURCE = `(() => {
   let passwordVisible = false;
 
   for (const el of document.querySelectorAll('input, select, textarea')) {
-    const type = String(el.type || '').toLowerCase();
-    const label = labelOf(el);
+    const kind = classifyInputKind(el);
     const value = el.value || '';
+    if (kind === 'search' || kind === 'other') continue;
 
-    if (type === 'password' || /password|pwd|密码/.test(label)) {
+    if (kind === 'password') {
       result.passwordPresent = Boolean(value);
       result.passwordValue = value;
       fields.password = selectorOf(el);
@@ -181,19 +257,17 @@ export const SNAPSHOT_SOURCE = `(() => {
       if (isVisible(el)) passwordVisible = true;
       continue;
     }
-    if (type === 'tel' || /phone|mobile|tel|手机|电话/.test(label)) {
+    if (kind === 'phone') {
       result.phone = value || result.phone;
       fields.phone = selectorOf(el);
       result.loginForm = true;
       if (isVisible(el)) phoneVisible = true;
       continue;
     }
-    if (type === 'text' || type === 'email' || type === 'number' || type === '') {
-      if (/user|account|nick|email|login|用户|账号|帐号|昵称/.test(label)) {
-        result.username = value || result.username;
-        fields.username = selectorOf(el);
-        result.loginForm = true;
-      }
+    if (kind === 'username') {
+      result.username = value || result.username;
+      fields.username = selectorOf(el);
+      result.loginForm = true;
     }
   }
 
@@ -231,25 +305,13 @@ export const SNAPSHOT_SOURCE = `(() => {
 })()`;
 
 export const FILL_SOURCE = `(selectors, values) => {
-  const filled = [];
-  const write = (el, value, label) => {
-    if (!el || value == null || value === '') return;
-    el.focus();
-    el.value = value;
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-    filled.push(label);
-  };
-  const find = (selector, extra) => {
-    if (selector) {
-      const chosen = document.querySelector(selector);
-      if (chosen) return chosen;
-    }
-    return extra ? document.querySelector(extra) : null;
-  };
-  write(find(selectors.phone, 'input[type="tel"],input[name*="phone" i],input[placeholder*="手机"]'), values.phone, 'phone');
-  write(find(selectors.username, 'input[type="text"],input[type="email"],input[name*="user" i]'), values.username, 'username');
-  const passwordEl = find(selectors.password, 'input[type="password"]');
-  if (passwordEl) write(passwordEl, values.password, 'password');
-  return filled;
+  const fieldHint = ${fieldHint.toString()};
+  const isSearchInput = ${isSearchInput.toString()};
+  const isPasswordInput = ${isPasswordInput.toString()};
+  const isPhoneInput = ${isPhoneInput.toString()};
+  const isUsernameInput = ${isUsernameInput.toString()};
+  const classifyInputKind = ${classifyInputKind.toString()};
+  const resolveFillField = ${resolveFillField.toString()};
+  const fillIdentityFields = ${fillIdentityFields.toString()};
+  return fillIdentityFields(document, selectors || {}, values || {});
 }`;

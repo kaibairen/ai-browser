@@ -3,9 +3,9 @@ import { launchEngine, launchRailWindow } from './engine/launch.js';
 import { attachEngine, isCdpDisconnect, keepSinglePageWindow, placeEngineBesideRail, placeWindow, reachedExpectedPage } from './engine/cdp.js';
 import { collapsedRailBounds, detectScreen, railBoundsFor } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
-import { createSessionPolicy } from './rail/policy.js';
+import { cancelUrlForMention, createSessionPolicy } from './rail/policy.js';
 import { startRailServer } from './rail/server.js';
-import { describeSite, describeSiteKey, IQIYI_CANCEL_URL, resolveOpenInput } from './sites/catalog.js';
+import { describeSite, describeSiteKey, resolveOpenInput } from './sites/catalog.js';
 import { clickPath } from './trace.js';
 
 function httpUrl(value) {
@@ -133,8 +133,7 @@ export async function startWorkspace() {
 
       async openCancel(body = {}) {
         const mention = policy.peekMention();
-        const cancelUrl =
-          httpUrl(body.url) || httpUrl(mention?.cancelUrl) || IQIYI_CANCEL_URL;
+        const cancelUrl = httpUrl(cancelUrlForMention(mention));
         const received = {
           bodyUrl: body.url || '',
           mentionUrl: mention?.cancelUrl || '',
@@ -143,6 +142,10 @@ export async function startWorkspace() {
           engineStatus,
           connected: Boolean(engine?.connected),
         };
+        if (!cancelUrl) {
+          await clickPath('open-cancel-ignored', { ...received, reason: 'no-mention' });
+          return { ok: false, error: '没有可打开的到期提及', url: engineUrl };
+        }
         if (openCancelInFlight) {
           clickPath('open-cancel-join', received);
           return openCancelInFlight;
