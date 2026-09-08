@@ -26,6 +26,20 @@ export function originsMatch(expected, current) {
   }
 }
 
+export function reachedExpectedPage(expected, current) {
+  const want = safeUrl(expected);
+  const got = safeUrl(current);
+  if (!want || !got) return false;
+  if (got.href.split('#')[0] === want.href.split('#')[0]) return true;
+  if (got.origin !== want.origin) return false;
+  const wantPath = want.pathname.replace(/\/+$/, '') || '/';
+  const gotPath = got.pathname.replace(/\/+$/, '') || '/';
+  if (wantPath !== '/' && gotPath !== wantPath && !gotPath.startsWith(`${wantPath}/`)) {
+    return false;
+  }
+  return true;
+}
+
 function safeUrl(value) {
   try {
     return new URL(value);
@@ -379,26 +393,29 @@ export async function attachEngine(port, handlers) {
         loaderId: navigateResult?.loaderId || '',
         errorText: navigateResult?.errorText || '',
       });
-      try {
-        await browser.send(
-          'Runtime.evaluate',
-          {
-            expression: `location.assign(${JSON.stringify(url)})`,
-            userGesture: true,
-          },
-          bound.sessionId,
-        );
-        await clickPath('location-assign', {
-          url,
-          targetId: bound.targetId,
-          sessionId: bound.sessionId,
-        });
-      } catch (error) {
-        await clickPath('location-assign-skipped', {
-          url,
-          targetId: bound.targetId,
-          error: error.message,
-        });
+      if (navigateResult?.errorText) {
+        try {
+          await browser.send(
+            'Runtime.evaluate',
+            {
+              expression: `location.assign(${JSON.stringify(url)})`,
+              userGesture: true,
+            },
+            bound.sessionId,
+          );
+          await clickPath('location-assign', {
+            url,
+            targetId: bound.targetId,
+            sessionId: bound.sessionId,
+            reason: navigateResult.errorText,
+          });
+        } catch (error) {
+          await clickPath('location-assign-skipped', {
+            url,
+            targetId: bound.targetId,
+            error: error.message,
+          });
+        }
       }
       return bound;
     },
@@ -409,7 +426,7 @@ export async function attachEngine(port, handlers) {
         if (closed) throw new Error('WebSocket connection closed');
         try {
           last = targetId ? await urlOfTarget(targetId) : await this.currentUrl();
-          if (last && originsMatch(url, last)) return last;
+          if (last && reachedExpectedPage(url, last)) return last;
         } catch (error) {
           if (isCdpDisconnect(error)) throw error;
         }

@@ -7,15 +7,16 @@
     <link rel="stylesheet" href="./rail.css" />
   </head>
   <body>
-    <form id="open-form">
+    <iframe name="open-nav" id="open-nav" title="" tabindex="-1"></iframe>
+    <form id="open-form" method="POST" action="/open" target="open-nav" accept-charset="utf-8">
       <input id="open-input" name="input" type="text" autocomplete="off" spellcheck="false" placeholder="打开页面" />
       <button type="submit" id="open-submit">打开</button>
     </form>
     <p id="engine-status" class="muted" hidden></p>
     <iframe name="cancel-nav" id="cancel-nav" title="" tabindex="-1"></iframe>
     <form id="cancel-form" method="POST" action="/open-cancel" target="cancel-nav" accept-charset="utf-8" hidden>
-      <input type="hidden" name="url" id="cancel-url" value="https://vip.iqiyi.com/" />
-      <button type="submit" id="mention" class="card mention"></button>
+      <input type="hidden" name="url" id="cancel-url" value="https://vip.iqiyi.com/viphelpdesk.html" />
+      <button type="button" id="mention" class="card mention"></button>
     </form>
     <main id="surface"></main>
     <script src="./rail.js"></script>

@@ -48,7 +48,8 @@ body {
   text-align: left;
 }
 
-#cancel-nav {
+#cancel-nav,
+#open-nav {
   position: absolute;
   width: 1px;
   height: 1px;

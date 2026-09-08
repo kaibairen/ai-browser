@@ -5,6 +5,7 @@ const engineStatus = document.getElementById('engine-status');
 const cancelForm = document.getElementById('cancel-form');
 const cancelUrl = document.getElementById('cancel-url');
 const mentionButton = document.getElementById('mention');
+const DEFAULT_CANCEL = 'https://vip.iqiyi.com/viphelpdesk.html';
 
 async function post(path, body) {
   const response = await fetch(path, {
@@ -40,7 +41,7 @@ function renderMention(mention) {
     mentionButton.textContent = '';
     return;
   }
-  const url = mention.cancelUrl || 'https://vip.iqiyi.com/';
+  const url = mention.cancelUrl || DEFAULT_CANCEL;
   if (cancelUrl.value !== url) cancelUrl.value = url;
   if (mentionButton.textContent !== mention.text) mentionButton.textContent = mention.text;
   cancelForm.hidden = false;
@@ -111,30 +112,46 @@ function isEnterKey(event) {
     event.key === 'Enter' ||
     event.code === 'Enter' ||
     event.code === 'NumpadEnter' ||
-    event.keyCode === 13
+    event.keyCode === 13 ||
+    ((event.key === 'Process' || event.keyCode === 229) &&
+      (event.code === 'Enter' || event.code === 'NumpadEnter'))
+  );
+}
+
+function isOpenField(event) {
+  const target = event.target;
+  return (
+    target === input ||
+    document.activeElement === input ||
+    (target && typeof target.closest === 'function' && Boolean(target.closest('#open-input, #open-form')))
   );
 }
 
 function traceClick(stage, extra) {
   post('/click-trace', {
     stage,
-    url: cancelUrl?.value || 'https://vip.iqiyi.com/',
+    url: cancelUrl?.value || DEFAULT_CANCEL,
     ...extra,
   }).catch(() => {});
 }
 
+function submitCancel() {
+  const url = cancelUrl?.value || DEFAULT_CANCEL;
+  traceClick('mention-click', { url });
+  post('/open-cancel', { url }).catch(() => {});
+  cancelForm?.submit();
+}
+
 if (cancelForm) {
   cancelForm.addEventListener('submit', () => {
-    const url = cancelUrl?.value || 'https://vip.iqiyi.com/';
+    const url = cancelUrl?.value || DEFAULT_CANCEL;
     traceClick('form-submit', { url });
     post('/open-cancel', { url }).catch(() => {});
   });
 }
 
 if (mentionButton) {
-  mentionButton.addEventListener('click', () => {
-    traceClick('mention-click');
-  });
+  mentionButton.addEventListener('click', submitCancel);
 }
 
 form.addEventListener('submit', (event) => {
@@ -146,7 +163,7 @@ document.addEventListener(
   'keydown',
   (event) => {
     if (!isEnterKey(event)) return;
-    if (event.target !== input) return;
+    if (!isOpenField(event)) return;
     if (!input.value.trim()) return;
     event.preventDefault();
     event.stopPropagation();

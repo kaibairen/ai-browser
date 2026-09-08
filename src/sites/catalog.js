@@ -1,10 +1,13 @@
+export const IQIYI_CANCEL_URL = 'https://vip.iqiyi.com/viphelpdesk.html';
+
 const IQIYI = {
   id: 'iqiyi',
   name: '爱奇艺',
   hosts: ['iqiyi.com'],
   membershipUrl: 'https://www.iqiyi.com/vip/',
   membershipUrls: ['https://www.iqiyi.com/vip/', 'https://vip.iqiyi.com/'],
-  cancelUrl: 'https://vip.iqiyi.com/',
+  // vip.iqiyi.com/ is a 302 back to www.iqiyi.com/vip/. The helpdesk stays.
+  cancelUrl: IQIYI_CANCEL_URL,
 };
 
 const SITES = [IQIYI];

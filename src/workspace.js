@@ -1,11 +1,11 @@
 import { locateEngineBinary } from './engine/locate.js';
 import { launchEngine, launchRailWindow } from './engine/launch.js';
-import { attachEngine, isCdpDisconnect, originsMatch } from './engine/cdp.js';
+import { attachEngine, isCdpDisconnect, reachedExpectedPage } from './engine/cdp.js';
 import { detectScreen } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
 import { startRailServer } from './rail/server.js';
-import { describeSite, describeSiteKey, resolveOpenInput } from './sites/catalog.js';
+import { describeSite, describeSiteKey, IQIYI_CANCEL_URL, resolveOpenInput } from './sites/catalog.js';
 import { clickPath } from './trace.js';
 
 function httpUrl(value) {
@@ -129,7 +129,7 @@ export async function startWorkspace() {
       async openCancel(body = {}) {
         const mention = policy.peekMention();
         const cancelUrl =
-          httpUrl(body.url) || httpUrl(mention?.cancelUrl) || 'https://vip.iqiyi.com/';
+          httpUrl(body.url) || httpUrl(mention?.cancelUrl) || IQIYI_CANCEL_URL;
         const received = {
           bodyUrl: body.url || '',
           mentionUrl: mention?.cancelUrl || '',
@@ -147,7 +147,7 @@ export async function startWorkspace() {
           try {
             const opened = await openInEngine(cancelUrl);
             await clickPath('open-cancel-reached', { cancelUrl, opened });
-            if (!originsMatch(cancelUrl, opened)) {
+            if (!reachedExpectedPage(cancelUrl, opened)) {
               await publish();
               return { ok: false, error: `引擎仍在 ${opened}`, url: opened };
             }
@@ -300,7 +300,7 @@ export async function startWorkspace() {
       if (!engine?.connected || engineStatus === 'not-open') {
         await relaunchEngine(url);
         const opened = await engine.waitForOrigin(url, 10000);
-        if (!originsMatch(url, opened)) {
+        if (!reachedExpectedPage(url, opened)) {
           const reached = await engine.navigateAndWait(url, 10000, hintUrl);
           engineUrl = reached;
         } else {
@@ -316,7 +316,7 @@ export async function startWorkspace() {
       await relaunchEngine(url);
       engineUrl = await engine.navigateAndWait(url, 10000, hintUrl);
     }
-    if (!originsMatch(url, engineUrl)) {
+    if (!reachedExpectedPage(url, engineUrl)) {
       throw new Error(`engine stayed on ${engineUrl}`);
     }
     await publish();
