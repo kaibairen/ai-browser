@@ -27,6 +27,10 @@ body {
   border-radius: 4px;
 }
 
+#engine-status {
+  padding: 4px 10px 0;
+}
+
 #surface {
   padding: 10px;
 }

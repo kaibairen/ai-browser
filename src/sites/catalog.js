@@ -2,7 +2,8 @@ const IQIYI = {
   id: 'iqiyi',
   name: '爱奇艺',
   hosts: ['iqiyi.com'],
-  membershipUrl: 'https://vip.iqiyi.com/',
+  membershipUrl: 'https://www.iqiyi.com/vip/',
+  membershipUrls: ['https://www.iqiyi.com/vip/', 'https://vip.iqiyi.com/'],
   cancelUrl: 'https://vip.iqiyi.com/',
 };
 
@@ -45,9 +46,11 @@ export function describeSiteKey(siteKey) {
   return {
     siteKey,
     host: siteKey,
+    hosts: known?.hosts || [siteKey],
     id: known?.id || null,
     name: known?.name || siteKey,
     membershipUrl: known?.membershipUrl || null,
+    membershipUrls: known?.membershipUrls || (known?.membershipUrl ? [known.membershipUrl] : []),
     cancelUrl: known?.cancelUrl || null,
   };
 }
@@ -59,11 +62,24 @@ export function describeSite(url) {
   return {
     siteKey,
     host,
+    hosts: known?.hosts || (siteKey ? [siteKey] : []),
     id: known?.id || null,
     name: known?.name || host,
     membershipUrl: known?.membershipUrl || null,
+    membershipUrls: known?.membershipUrls || (known?.membershipUrl ? [known.membershipUrl] : []),
     cancelUrl: known?.cancelUrl || null,
   };
+}
+
+export function hostBelongsToSite(hostname, site) {
+  if (!hostname || !site) return false;
+  const host = String(hostname)
+    .replace(/^www\./, '')
+    .toLowerCase();
+  const suffixes = [site.siteKey, ...(site.hosts || [])]
+    .filter(Boolean)
+    .map((value) => String(value).replace(/^www\./, '').toLowerCase());
+  return suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
 }
 
 export function resolveOpenInput(input) {

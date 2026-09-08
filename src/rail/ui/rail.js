@@ -1,6 +1,7 @@
 const surface = document.getElementById('surface');
 const form = document.getElementById('open-form');
 const input = document.getElementById('open-input');
+const engineStatus = document.getElementById('engine-status');
 
 async function post(path, body) {
   const response = await fetch(path, {
@@ -30,6 +31,11 @@ function field(name, label, value, type = 'text') {
 }
 
 function render(state) {
+  if (engineStatus) {
+    const closed = state.engine?.status === 'not-open';
+    engineStatus.hidden = !closed;
+    engineStatus.textContent = closed ? '引擎未打开' : '';
+  }
   const parts = [];
   if (state.mention) {
     parts.push(
@@ -76,10 +82,21 @@ function render(state) {
   surface.innerHTML = parts.join('');
 }
 
+async function submitOpen() {
+  const value = input.value.trim();
+  if (!value) return;
+  await post('/open', { input: value });
+}
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (!input.value.trim()) return;
-  await post('/open', { input: input.value.trim() });
+  await submitOpen();
+});
+
+input.addEventListener('keydown', async (event) => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  await submitOpen();
 });
 
 surface.addEventListener('click', async (event) => {

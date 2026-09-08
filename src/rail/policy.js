@@ -1,3 +1,5 @@
+import { hostBelongsToSite } from '../sites/catalog.js';
+
 export const NEAR_EXPIRY_DAYS = 7;
 
 export function daysUntil(expiresAt, now = new Date()) {
@@ -19,12 +21,35 @@ export function shouldMentionExpiry(record, now = new Date()) {
 }
 
 export function isMembershipPage(site, url) {
-  if (!site?.membershipUrl || !url) return false;
+  if (!site?.siteKey || !url) return false;
+  let current;
   try {
-    return new URL(url).origin === new URL(site.membershipUrl).origin;
+    current = new URL(url);
   } catch {
     return false;
   }
+
+  const host = current.hostname.toLowerCase();
+  if (!hostBelongsToSite(host, site)) return false;
+
+  if (host.split('.')[0] === 'vip') return true;
+  if (/\/vip(\/|$)/i.test(current.pathname)) return true;
+
+  for (const candidate of [site.membershipUrl, ...(site.membershipUrls || [])]) {
+    if (!candidate) continue;
+    try {
+      const membership = new URL(candidate);
+      if (!hostBelongsToSite(membership.hostname, site)) continue;
+      const currentPath = current.pathname.replace(/\/$/, '') || '/';
+      const membershipPath = membership.pathname.replace(/\/$/, '') || '/';
+      if (membershipPath !== '/' && (currentPath === membershipPath || currentPath.startsWith(`${membershipPath}/`))) {
+        return true;
+      }
+    } catch {
+      // Ignore malformed catalog URLs.
+    }
+  }
+  return false;
 }
 
 export function expiryMention(record, site) {

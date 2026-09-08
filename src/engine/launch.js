@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { engineProfileDir, railProfileDir } from '../paths.js';
+import { detectScreen, engineBounds, railBounds } from './screen.js';
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -28,62 +29,67 @@ export async function waitForCdp(port, timeoutMs = 20000) {
   throw new Error(`Engine CDP did not come up on port ${port}`);
 }
 
-function screenSize() {
-  return {
-    width: Number(process.env.AI_BROWSER_SCREEN_WIDTH || 1440),
-    height: Number(process.env.AI_BROWSER_SCREEN_HEIGHT || 900),
-  };
+async function killPrevious(profile) {
+  try {
+    const pid = Number(await readFile(`${profile}.pid`, 'utf8'));
+    if (pid) process.kill(pid, 'SIGTERM');
+  } catch {
+    // No previous pid, or already gone.
+  }
+  if (process.platform === 'win32') return;
+  await new Promise((resolve) => {
+    const child = spawn('pkill', ['-f', profile], { stdio: 'ignore' });
+    child.on('exit', () => resolve());
+    child.on('error', () => resolve());
+  });
+  await new Promise((resolve) => setTimeout(resolve, 300));
 }
 
-export async function launchEngine(binary) {
-  const profile = engineProfileDir();
-  await mkdir(profile, { recursive: true });
-  const port = await freePort();
-  const { width, height } = screenSize();
-  const railWidth = 280;
-  const child = spawn(
-    binary,
-    [
-      `--user-data-dir=${profile}`,
+function chromeArgs({ profile, port, bounds, appUrl, startUrl }) {
+  const args = [
+    `--user-data-dir=${profile}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-sync',
+    '--disable-session-crashed-bubble',
+    `--window-position=${bounds.left},${bounds.top}`,
+    `--window-size=${bounds.width},${bounds.height}`,
+  ];
+  if (port) {
+    args.push(
       `--remote-debugging-port=${port}`,
       '--remote-debugging-address=127.0.0.1',
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--disable-sync',
-      `--window-position=0,0`,
-      `--window-size=${Math.max(800, width - railWidth)},${height}`,
-      'about:blank',
-    ],
-    {
-      stdio: 'ignore',
-      detached: true,
-    },
-  );
-  child.unref();
-  await waitForCdp(port);
-  return { port, pid: child.pid, profile };
+      '--remote-allow-origins=*',
+    );
+  }
+  if (appUrl) args.push(`--app=${appUrl}`);
+  else args.push(startUrl || 'about:blank');
+  return args;
 }
 
-export async function launchRailWindow(binary, railUrl) {
+export async function launchEngine(binary, startUrl = 'about:blank') {
+  const profile = engineProfileDir();
+  await mkdir(profile, { recursive: true });
+  await killPrevious(profile);
+  const port = await freePort();
+  const screen = await detectScreen();
+  const bounds = engineBounds(screen);
+  const child = spawn(binary, chromeArgs({ profile, port, bounds, startUrl }), {
+    stdio: 'ignore',
+  });
+  await writeFile(`${profile}.pid`, String(child.pid || ''), 'utf8');
+  await waitForCdp(port);
+  return { port, pid: child.pid, profile, screen, child };
+}
+
+export async function launchRailWindow(binary, railUrl, screen) {
   const profile = railProfileDir();
   await mkdir(profile, { recursive: true });
-  const { width, height } = screenSize();
-  const railWidth = 280;
-  const child = spawn(
-    binary,
-    [
-      `--user-data-dir=${profile}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      `--app=${railUrl}`,
-      `--window-position=${Math.max(0, width - railWidth)},0`,
-      `--window-size=${railWidth},${height}`,
-    ],
-    {
-      stdio: 'ignore',
-      detached: true,
-    },
-  );
-  child.unref();
-  return { pid: child.pid, profile };
+  await killPrevious(profile);
+  const bounds = railBounds(screen || (await detectScreen()));
+  const child = spawn(binary, chromeArgs({ profile, bounds, appUrl: railUrl }), {
+    stdio: 'ignore',
+  });
+  await writeFile(`${profile}.pid`, String(child.pid || ''), 'utf8');
+  return { pid: child.pid, profile, child };
 }

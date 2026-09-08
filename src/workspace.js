@@ -1,6 +1,7 @@
 import { locateEngineBinary } from './engine/locate.js';
 import { launchEngine, launchRailWindow } from './engine/launch.js';
-import { attachEngine } from './engine/cdp.js';
+import { attachEngine, isCdpDisconnect } from './engine/cdp.js';
+import { detectScreen } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
 import { startRailServer } from './rail/server.js';
@@ -16,9 +17,12 @@ export async function startWorkspace() {
   let engine = null;
   let engineUrl = 'about:blank';
   let engineStatus = 'starting';
+  let launched = null;
   let lastSelectors = {};
   let pendingPassword = '';
   let snapTimer = null;
+  let railWindow = null;
+  let screen = await detectScreen();
 
   const currentSite = () => describeSite(engineUrl);
 
@@ -48,10 +52,25 @@ export async function startWorkspace() {
         if (!resolved) {
           return { ok: false, error: '需要网址，或爱奇艺这样的已知站点' };
         }
-        if (!engine) return { ok: false, error: '引擎尚未打开' };
-        await engine.navigate(resolved.url);
-        await engine.focusEngine();
-        return { ok: true, url: resolved.url };
+        try {
+          if (!engine?.connected || engineStatus === 'not-open') {
+            await relaunchEngine(resolved.url);
+          } else {
+            await engine.navigate(resolved.url);
+            engineUrl = resolved.url;
+            await engine.focusEngine();
+          }
+          await publish();
+          return { ok: true, url: resolved.url };
+        } catch (error) {
+          if (isCdpDisconnect(error)) {
+            markNotOpen();
+            await relaunchEngine(resolved.url);
+            await publish();
+            return { ok: true, url: resolved.url };
+          }
+          return { ok: false, error: error.message };
+        }
       },
 
       async confirmSave(fields) {
@@ -87,7 +106,9 @@ export async function startWorkspace() {
       async confirmFill() {
         const site = currentSite();
         const record = store.get(site.siteKey);
-        if (!record || !engine) return { ok: false, error: '没有可填写的已确认身份' };
+        if (!record || !engine?.connected) {
+          return { ok: false, error: '没有可填写的已确认身份' };
+        }
         const password = store.takePasswordForFill(site.siteKey);
         await engine.fill(lastSelectors, {
           phone: record.phone,
@@ -108,15 +129,25 @@ export async function startWorkspace() {
 
       async openCancel() {
         const mention = policy.consumeMention();
-        if (!mention?.cancelUrl || !engine) {
+        if (!mention?.cancelUrl) {
           await publish();
           return { ok: false, error: '没有可打开的取消页' };
         }
         if (mention.siteKey && mention.expiresAt) {
           await store.markExpiryMentioned(mention.siteKey, mention.expiresAt);
         }
-        await engine.navigate(mention.cancelUrl);
-        await engine.focusEngine();
+        try {
+          if (!engine?.connected || engineStatus === 'not-open') {
+            await relaunchEngine(mention.cancelUrl);
+          } else {
+            await engine.navigate(mention.cancelUrl);
+            await engine.focusEngine();
+          }
+        } catch (error) {
+          if (!isCdpDisconnect(error)) throw error;
+          markNotOpen();
+          await relaunchEngine(mention.cancelUrl);
+        }
         await publish();
         return { ok: true, url: mention.cancelUrl };
       },
@@ -132,6 +163,14 @@ export async function startWorkspace() {
     },
   });
 
+  function markNotOpen() {
+    engineStatus = 'not-open';
+    engine = null;
+    policy.setSnapshot(null);
+    pendingPassword = '';
+    publish().catch(() => {});
+  }
+
   async function publish() {
     const state = getState();
     const mention = state.mention || policy.peekMention();
@@ -146,57 +185,117 @@ export async function startWorkspace() {
   }
 
   async function refreshSnapshot() {
-    if (!engine) return;
-    const snap = await engine.snapshot();
-    if (!snap) return;
-    const site = describeSite(snap.href || engineUrl);
-    if (snap.href) engineUrl = snap.href;
-    lastSelectors = snap.fields || {};
-    pendingPassword = snap.passwordValue || '';
-    policy.setSnapshot({
-      siteKey: site.siteKey,
-      phone: snap.phone,
-      username: snap.username,
-      loginMethod: snap.loginMethod,
-      expiresAt: snap.expiresAt,
-      passwordPresent: Boolean(snap.passwordPresent),
-      loginForm: Boolean(snap.loginForm),
+    if (!engine?.connected) return;
+    try {
+      const snap = await engine.snapshot();
+      if (!snap) return;
+      const site = describeSite(snap.href || engineUrl);
+      if (snap.href) engineUrl = snap.href;
+      lastSelectors = snap.fields || {};
+      pendingPassword = snap.passwordValue || '';
+      policy.setSnapshot({
+        siteKey: site.siteKey,
+        phone: snap.phone,
+        username: snap.username,
+        loginMethod: snap.loginMethod,
+        expiresAt: snap.expiresAt,
+        passwordPresent: Boolean(snap.passwordPresent),
+        loginForm: Boolean(snap.loginForm),
+      });
+      await publish();
+    } catch (error) {
+      if (isCdpDisconnect(error)) markNotOpen();
+    }
+  }
+
+  function bindEngine(next) {
+    engine = next;
+    engineStatus = next.connected ? 'running' : 'not-open';
+    return next;
+  }
+
+  async function connectEngine(port, startUrl) {
+    const attached = await attachEngine(port, {
+      onNavigate(url) {
+        if (!url) return;
+        engineUrl = url;
+        policy.setSnapshot(null);
+        pendingPassword = '';
+        publish().catch(() => {});
+        refreshSnapshot().catch((error) => {
+          if (isCdpDisconnect(error)) markNotOpen();
+        });
+      },
+      onLoad() {
+        refreshSnapshot().catch((error) => {
+          if (isCdpDisconnect(error)) markNotOpen();
+        });
+      },
+      onAction() {
+        clearTimeout(snapTimer);
+        snapTimer = setTimeout(() => {
+          refreshSnapshot().catch((error) => {
+            if (isCdpDisconnect(error)) markNotOpen();
+          });
+        }, 400);
+      },
+      onDisconnect() {
+        markNotOpen();
+      },
     });
-    await publish();
+    bindEngine(attached);
+    engineUrl = startUrl || engineUrl;
+    try {
+      screen = await attached.layoutLeftOfRail(screen);
+    } catch (error) {
+      if (isCdpDisconnect(error)) markNotOpen();
+    }
+    return attached;
+  }
+
+  async function relaunchEngine(startUrl) {
+    if (engine) {
+      try {
+        await engine.close();
+      } catch {
+        // Previous session already gone.
+      }
+    }
+    launched = await launchEngine(located.binary, startUrl || 'about:blank');
+    engineUrl = startUrl || 'about:blank';
+    engineStatus = 'starting';
+    await connectEngine(launched.port, engineUrl);
+    if (engine?.connected) await engine.focusEngine();
   }
 
   const railPort = await rail.listen();
   const railUrl = `http://127.0.0.1:${railPort}/`;
-  const railWindow = await launchRailWindow(located.binary, railUrl);
 
-  const launched = await launchEngine(located.binary);
-  engineStatus = 'running';
-  engine = await attachEngine(launched.port, {
-    onNavigate(url) {
-      engineUrl = url;
-      policy.setSnapshot(null);
-      pendingPassword = '';
-      publish();
-      refreshSnapshot();
-    },
-    onLoad() {
-      refreshSnapshot().catch(() => {});
-    },
-    onAction() {
-      clearTimeout(snapTimer);
-      snapTimer = setTimeout(() => {
-        refreshSnapshot().catch(() => {});
-      }, 400);
-    },
-  });
-  await engine.focusEngine();
+  launched = await launchEngine(located.binary, 'about:blank');
+  try {
+    await connectEngine(launched.port, 'about:blank');
+  } catch (error) {
+    if (!isCdpDisconnect(error)) throw error;
+    markNotOpen();
+  }
+  railWindow = await launchRailWindow(located.binary, railUrl, screen);
+  if (engine?.connected) await engine.focusEngine();
   await publish();
+
+  setInterval(() => {
+    if (engineStatus === 'not-open' || !launched?.port) return;
+    fetch(`http://127.0.0.1:${launched.port}/json/version`)
+      .then((response) => {
+        if (!response.ok) markNotOpen();
+      })
+      .catch(() => markNotOpen());
+  }, 2000);
 
   const shutdown = async () => {
     clearTimeout(snapTimer);
     await engine?.close();
     rail.close();
-    for (const pid of [railWindow.pid, launched.pid]) {
+    for (const pid of [railWindow?.pid, launched?.pid]) {
       if (pid) {
         try {
           process.kill(pid);
