@@ -113,18 +113,43 @@ function isEnterKey(event) {
     event.code === 'Enter' ||
     event.code === 'NumpadEnter' ||
     event.keyCode === 13 ||
+    event.which === 13 ||
     ((event.key === 'Process' || event.keyCode === 229) &&
-      (event.code === 'Enter' || event.code === 'NumpadEnter'))
+      (event.code === 'Enter' || event.code === 'NumpadEnter' || event.key === 'Enter'))
   );
 }
 
 function isOpenField(event) {
   const target = event.target;
-  return (
-    target === input ||
-    document.activeElement === input ||
-    (target && typeof target.closest === 'function' && Boolean(target.closest('#open-input, #open-form')))
+  if (target === input || document.activeElement === input) return true;
+  if (target && typeof target.closest === 'function' && target.closest('#open-input, #open-form')) {
+    return true;
+  }
+  // IME can move the first Enter onto body while 「爱奇艺」 is already in the input.
+  const active = document.activeElement;
+  return Boolean(
+    input.value.trim() &&
+      (active === document.body || active === document.documentElement || active == null),
   );
+}
+
+let openAfterIme = false;
+
+function handleOpenEnter(event) {
+  if (!isEnterKey(event)) return;
+  if (!isOpenField(event)) return;
+  if (!input.value.trim()) return;
+  // Chrome IME: first Enter is keydown 229 / Process. preventDefault here
+  // swallows it and /open never fires. Post now; keyup/compositionend are backups.
+  if (event.type === 'keydown' && (event.isComposing || event.keyCode === 229 || event.key === 'Process')) {
+    openAfterIme = true;
+    submitOpen();
+    return;
+  }
+  openAfterIme = false;
+  event.preventDefault();
+  event.stopPropagation();
+  submitOpen();
 }
 
 function traceClick(stage, extra) {
@@ -159,18 +184,20 @@ form.addEventListener('submit', (event) => {
   submitOpen();
 });
 
-document.addEventListener(
-  'keydown',
-  (event) => {
-    if (!isEnterKey(event)) return;
-    if (!isOpenField(event)) return;
-    if (!input.value.trim()) return;
-    event.preventDefault();
-    event.stopPropagation();
-    submitOpen();
-  },
-  true,
-);
+document.addEventListener('keydown', handleOpenEnter, true);
+document.addEventListener('keyup', handleOpenEnter, true);
+document.addEventListener('keypress', handleOpenEnter, true);
+input.addEventListener('keydown', handleOpenEnter);
+input.addEventListener('keyup', handleOpenEnter);
+input.addEventListener('keypress', handleOpenEnter);
+input.addEventListener('compositionend', () => {
+  if (!openAfterIme || !input.value.trim()) {
+    openAfterIme = false;
+    return;
+  }
+  openAfterIme = false;
+  submitOpen();
+});
 
 surface.addEventListener('click', async (event) => {
   const action = event.target.closest('[data-action]')?.dataset.action;
