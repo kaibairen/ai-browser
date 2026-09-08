@@ -1,5 +1,5 @@
 import CDP from 'chrome-remote-interface';
-import { engineBounds, fitOuterBounds } from './screen.js';
+import { engineBounds, engineBoundsLeftOf, fitOuterBounds, RAIL_GAP } from './screen.js';
 import { FILL_SOURCE, OBSERVER_SOURCE, SNAPSHOT_SOURCE } from './observer.js';
 import { clickPath } from '../trace.js';
 
@@ -163,6 +163,91 @@ export async function placeWindow(port, bounds, screen) {
 
   if (lastError) throw lastError;
   return wanted;
+}
+
+export async function getWindowOuterBounds(port) {
+  const browser = await connectBrowser(port);
+  try {
+    const { targetInfos } = await browser.Target.getTargets();
+    const page = targetInfos.find((info) => info.type === 'page' || info.type === 'app');
+    if (!page) return null;
+    const { windowId } = await browser.Browser.getWindowForTarget({
+      targetId: page.targetId,
+    });
+    const { bounds } = await browser.Browser.getWindowBounds({ windowId });
+    return { ...bounds, windowId, targetId: page.targetId };
+  } finally {
+    try {
+      await browser.close();
+    } catch {
+      // Placement connection is disposable.
+    }
+  }
+}
+
+export async function keepSinglePageWindow(port, keepUrl) {
+  const browser = await connectBrowser(port);
+  try {
+    const { targetInfos } = await browser.Target.getTargets();
+    const pages = targetInfos.filter((info) => info.type === 'page' || info.type === 'app');
+    if (pages.length <= 1) return pages[0] || null;
+    const want = keepUrl ? safeUrl(keepUrl) : null;
+    const scored = pages.map((page) => {
+      const current = safeUrl(page.url);
+      let score = 0;
+      if (want && current) {
+        if (current.href.split('#')[0] === want.href.split('#')[0]) score += 8;
+        if (current.origin === want.origin) score += 4;
+      }
+      if (page.url && page.url !== 'about:blank') score += 1;
+      return { page, score };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    const keep = scored[0].page;
+    for (const { page } of scored.slice(1)) {
+      try {
+        await browser.Target.closeTarget({ targetId: page.targetId });
+      } catch {
+        // Extra hanger may already be gone.
+      }
+    }
+    return keep;
+  } finally {
+    try {
+      await browser.close();
+    } catch {
+      // Placement connection is disposable.
+    }
+  }
+}
+
+export async function placeEngineBesideRail(enginePort, railPort, screen) {
+  let rail = await getWindowOuterBounds(railPort);
+  if (!rail || !Number.isFinite(rail.left)) {
+    return placeWindow(enginePort, engineBounds(screen), screen);
+  }
+  let last = null;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    rail = (await getWindowOuterBounds(railPort)) || rail;
+    const engine = await getWindowOuterBounds(enginePort);
+    if (!engine) break;
+    const limit = rail.left - RAIL_GAP;
+    const engineRight = (engine.left || 0) + (engine.width || 0);
+    last = engine;
+    if (engineRight <= limit + 1) return engine;
+    const width = Math.max(640, Math.floor(limit - (engine.left || 0)));
+    last = await placeWindow(
+      enginePort,
+      {
+        left: engine.left || 0,
+        top: engine.top || 0,
+        width,
+        height: engine.height || engineBounds(screen).height,
+      },
+      screen,
+    );
+  }
+  return last;
 }
 
 export async function attachEngine(port, handlers) {
@@ -394,12 +479,12 @@ export async function attachEngine(port, handlers) {
     get connected() {
       return !closed;
     },
-    async layoutLeftOfRail(screen) {
+    async layoutLeftOfRail(screen, railLeft) {
       if (closed || !pageTargetId) return screen;
       const { windowId, bounds } = await Browser.getWindowForTarget({
         targetId: pageTargetId,
       });
-      const next = engineBounds(screen);
+      const next = engineBoundsLeftOf(screen, railLeft);
       if (bounds.windowState && bounds.windowState !== 'normal') {
         await Browser.setWindowBounds({
           windowId,

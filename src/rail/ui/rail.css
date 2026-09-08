@@ -185,12 +185,14 @@ body.collapsed #expand {
   width: 100%;
   min-height: 100vh;
   margin: 0;
-  padding: 8px 4px;
+  padding: 10px 4px;
   border: 0;
   border-radius: 0;
   background: #ecece8;
   writing-mode: vertical-rl;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.18em;
+  font-size: 13px;
+  color: #333;
 }
 
 #expand[hidden] {

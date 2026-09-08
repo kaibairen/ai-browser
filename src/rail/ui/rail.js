@@ -71,7 +71,7 @@ function railBox(width, height) {
 }
 
 function shapeFor(state) {
-  if (collapsed) return railBox(40, 96);
+  if (collapsed) return railBox(44, 132);
   if (state?.proposal) return railBox(252, 460);
   if (state?.mention) return railBox(252, 340);
   return railBox(252, 248);
@@ -102,8 +102,12 @@ function releaseFocus() {
 
 function setCollapsed(next) {
   collapsed = Boolean(next);
+  document.title = '左侧打开';
   document.body.classList.toggle('collapsed', collapsed);
-  if (expandButton) expandButton.hidden = !collapsed;
+  if (expandButton) {
+    expandButton.hidden = !collapsed;
+    expandButton.textContent = '左侧打开';
+  }
   lastBoxKey = '';
   fitRailWindow(lastState, true);
   post(collapsed ? '/rail-collapse' : '/rail-expand').catch(() => {});
@@ -306,6 +310,7 @@ surface.addEventListener('click', async (event) => {
 });
 
 async function boot() {
+  document.title = '左侧打开';
   document.body.tabIndex = -1;
   let launchGuard = true;
   input.addEventListener('pointerdown', () => {

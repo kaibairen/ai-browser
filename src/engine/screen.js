@@ -7,9 +7,9 @@ export const RAIL_WIDTH = 252;
 export const RAIL_HEIGHT = 248;
 export const RAIL_MENTION_HEIGHT = 340;
 export const RAIL_CONFIRM_HEIGHT = 460;
-export const RAIL_GAP = 16;
-export const RAIL_COLLAPSED_WIDTH = 40;
-export const RAIL_COLLAPSED_HEIGHT = 96;
+export const RAIL_GAP = 20;
+export const RAIL_COLLAPSED_WIDTH = 44;
+export const RAIL_COLLAPSED_HEIGHT = 132;
 export const SCREEN_MARGIN = 16;
 // --window-size is the client area. Linux decorations and a title bar sit
 // outside that, which is why a 280px rail at x=1000 clipped on 1280.
@@ -71,14 +71,19 @@ export function fitOuterBounds(bounds, screen) {
   return { left, top, width, height };
 }
 
-export function engineBounds(screen) {
-  const railReserve = RAIL_WIDTH + RAIL_GAP + FRAME_SLACK_X + SCREEN_MARGIN;
+export function engineBoundsLeftOf(screen, railLeft) {
+  const slotLeft =
+    Number.isFinite(railLeft) && railLeft > 0 ? railLeft : railBoundsFor(screen).left;
   return {
     left: 0,
     top: 0,
-    width: Math.max(640, screen.width - railReserve),
+    width: Math.max(640, Math.floor(slotLeft - RAIL_GAP)),
     height: Math.max(480, screen.height - FRAME_SLACK_Y),
   };
+}
+
+export function engineBounds(screen) {
+  return engineBoundsLeftOf(screen, railBoundsFor(screen).left);
 }
 
 function railBox(screen, width, height) {
@@ -109,11 +114,12 @@ export function collapsedRailBounds(screen) {
   return railBox(screen, RAIL_COLLAPSED_WIDTH, RAIL_COLLAPSED_HEIGHT);
 }
 
-export function commandLineBounds(outer) {
+export function commandLineBounds(outer, role = 'rail') {
+  const insetX = role === 'engine' ? 24 : 8;
   return {
     left: outer.left,
     top: outer.top,
-    width: Math.max(160, outer.width - 8),
+    width: Math.max(160, outer.width - insetX),
     height: Math.max(80, outer.height - 8),
   };
 }

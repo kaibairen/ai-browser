@@ -1,6 +1,6 @@
 import { locateEngineBinary } from './engine/locate.js';
 import { launchEngine, launchRailWindow } from './engine/launch.js';
-import { attachEngine, isCdpDisconnect, placeWindow, reachedExpectedPage } from './engine/cdp.js';
+import { attachEngine, isCdpDisconnect, keepSinglePageWindow, placeEngineBesideRail, placeWindow, reachedExpectedPage } from './engine/cdp.js';
 import { collapsedRailBounds, detectScreen, railBoundsFor } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
@@ -34,6 +34,7 @@ export async function startWorkspace() {
   let snapTimer = null;
   let railWindow = null;
   let railRestarts = 0;
+  let railGeneration = 0;
   let openCancelInFlight = null;
   let screen = await detectScreen();
   let versionMisses = 0;
@@ -193,6 +194,11 @@ export async function startWorkspace() {
 
   async function placeRail(kind = 'expand') {
     if (!railWindow?.port) return { ok: false };
+    try {
+      await keepSinglePageWindow(railWindow.port, railUrl);
+    } catch {
+      // Still place the live hanger.
+    }
     const state = getState();
     const bounds =
       kind === 'collapse'
@@ -202,6 +208,13 @@ export async function startWorkspace() {
             mention: Boolean(state.mention),
           });
     await placeWindow(railWindow.port, bounds, screen);
+    if (kind !== 'collapse' && launched?.port) {
+      try {
+        await placeEngineBesideRail(launched.port, railWindow.port, screen);
+      } catch {
+        // Engine may already be in the rail's slot.
+      }
+    }
     return { ok: true };
   }
 
@@ -347,10 +360,13 @@ export async function startWorkspace() {
 
   async function ensureRail() {
     if (railRestarts > 8) return;
+    const generation = ++railGeneration;
     railWindow = await launchRailWindow(located.binary, railUrl, screen);
     railWindow.child?.on('exit', () => {
+      if (generation !== railGeneration) return;
       railRestarts += 1;
       setTimeout(() => {
+        if (generation !== railGeneration) return;
         ensureRail().catch(() => {});
       }, 600);
     });
@@ -367,10 +383,18 @@ export async function startWorkspace() {
     markNotOpen();
   }
   await ensureRail();
+  try {
+    await placeRail('expand');
+  } catch {
+    // First-glance placement retries below.
+  }
   if (engine?.connected) await engine.focusEngine();
   setTimeout(() => {
-    engine?.focusEngine?.().catch(() => {});
-    placeRail('expand').catch(() => {});
+    placeRail('expand')
+      .catch(() => {})
+      .finally(() => {
+        engine?.focusEngine?.().catch(() => {});
+      });
   }, 450);
   await publish();
 

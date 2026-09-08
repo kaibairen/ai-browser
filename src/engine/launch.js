@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer } from 'node:net';
 import { cacheDir, engineProfileDir, fontCacheDir, railProfileDir, tmpDir } from '../paths.js';
 import { commandLineBounds, detectScreen, engineBounds, railBounds } from './screen.js';
-import { placeWindow } from './cdp.js';
+import { keepSinglePageWindow, placeWindow } from './cdp.js';
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -31,12 +31,83 @@ export async function waitForCdp(port, timeoutMs = 20000) {
   throw new Error(`CDP did not come up on port ${port}`);
 }
 
-async function killPidFile(profile) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pidsForProfile(profile) {
+  const found = new Set();
   try {
     const pid = Number(await readFile(`${profile}.pid`, 'utf8'));
-    if (pid) process.kill(pid, 'SIGTERM');
+    if (pid) found.add(pid);
   } catch {
-    // No previous pid, or already gone.
+    // No previous pid file.
+  }
+  if (process.platform === 'linux') {
+    try {
+      const entries = await readdir('/proc');
+      for (const entry of entries) {
+        if (!/^\d+$/.test(entry)) continue;
+        try {
+          const cmd = await readFile(`/proc/${entry}/cmdline`);
+          if (cmd.includes(profile)) found.add(Number(entry));
+        } catch {
+          // Process vanished.
+        }
+      }
+    } catch {
+      // /proc not available.
+    }
+  }
+  return [...found];
+}
+
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function reapProfile(profile) {
+  let pids = await pidsForProfile(profile);
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      // Already gone.
+    }
+  }
+  const deadline = Date.now() + 1600;
+  while (Date.now() < deadline) {
+    pids = (await pidsForProfile(profile)).filter(pidAlive);
+    if (!pids.length) break;
+    await sleep(80);
+  }
+  for (const pid of await pidsForProfile(profile)) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // Already gone.
+    }
+  }
+  await sleep(80);
+  for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+    try {
+      await unlink(join(profile, name));
+    } catch {
+      // Lock already released.
+    }
+  }
+  const def = join(profile, 'Default');
+  for (const name of ['Current Session', 'Current Tabs', 'Last Session', 'Last Tabs']) {
+    try {
+      await unlink(join(def, name));
+    } catch {
+      // No leftover session to clear.
+    }
   }
 }
 
@@ -101,6 +172,14 @@ async function prepareChromeProfile(profile, { bounds, appUrl } = {}) {
     check_default_browser: false,
     should_reset_check_default_browser: false,
   };
+  prefs.session = { ...(prefs.session || {}), restore_on_startup: 5 };
+  prefs.exit_type = 'Normal';
+  prefs.exited_cleanly = true;
+  prefs.profile = {
+    ...(prefs.profile || {}),
+    exit_type: 'Normal',
+    exited_cleanly: true,
+  };
   if (bounds && !appUrl) {
     prefs.browser.window_placement = windowPlacement(bounds);
   }
@@ -119,7 +198,7 @@ async function prepareChromeProfile(profile, { bounds, appUrl } = {}) {
 }
 
 function chromeArgs({ profile, port, bounds, appUrl, startUrl }) {
-  const inner = commandLineBounds(bounds);
+  const inner = commandLineBounds(bounds, appUrl ? 'rail' : 'engine');
   const args = [
     `--user-data-dir=${profile}`,
     `--disk-cache-dir=${cacheDir()}/disk`,
@@ -167,7 +246,7 @@ async function placeWithRetry(port, bounds, screen) {
 export async function launchEngine(binary, startUrl = 'about:blank') {
   const profile = engineProfileDir();
   await mkdir(profile, { recursive: true });
-  await killPidFile(profile);
+  await reapProfile(profile);
   const port = await freePort();
   const screen = await detectScreen();
   const bounds = engineBounds(screen);
@@ -189,7 +268,7 @@ export async function launchEngine(binary, startUrl = 'about:blank') {
 export async function launchRailWindow(binary, railUrl, screen) {
   const profile = railProfileDir();
   await mkdir(profile, { recursive: true });
-  await killPidFile(profile);
+  await reapProfile(profile);
   const resolvedScreen = screen || (await detectScreen());
   const bounds = railBounds(resolvedScreen);
   await prepareChromeProfile(profile, { bounds, appUrl: railUrl });
@@ -200,6 +279,11 @@ export async function launchRailWindow(binary, railUrl, screen) {
   });
   await writeFile(`${profile}.pid`, String(child.pid || ''), 'utf8');
   await waitForCdp(port);
+  try {
+    await keepSinglePageWindow(port, railUrl);
+  } catch {
+    // A single hanger is enough; placement can still proceed.
+  }
   try {
     await placeWithRetry(port, bounds, resolvedScreen);
   } catch {
