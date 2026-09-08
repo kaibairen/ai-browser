@@ -250,7 +250,12 @@ function traceClick(stage, extra) {
   }).catch(() => {});
 }
 
+function mentionVisible() {
+  return Boolean(mentionButton?.textContent?.trim()) && Boolean(cancelForm) && !cancelForm.hidden;
+}
+
 function submitCancel() {
+  if (!mentionVisible()) return;
   const url = cancelUrl?.value || DEFAULT_CANCEL;
   traceClick('mention-click', { url });
   post('/open-cancel', { url }).catch(() => {});
@@ -258,7 +263,11 @@ function submitCancel() {
 }
 
 if (cancelForm) {
-  cancelForm.addEventListener('submit', () => {
+  cancelForm.addEventListener('submit', (event) => {
+    if (!mentionVisible()) {
+      event.preventDefault();
+      return;
+    }
     const url = cancelUrl?.value || DEFAULT_CANCEL;
     traceClick('form-submit', { url });
     post('/open-cancel', { url }).catch(() => {});

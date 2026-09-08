@@ -1,4 +1,4 @@
-import { hostBelongsToSite, normalizeLoginMethod } from '../sites/catalog.js';
+import { hostBelongsToSite, IQIYI_CANCEL_URL, normalizeLoginMethod } from '../sites/catalog.js';
 
 export const NEAR_EXPIRY_DAYS = 7;
 
@@ -58,9 +58,15 @@ export function expiryMention(record, site) {
     siteKey: site.siteKey,
     siteName: site.name,
     expiresAt: record.expiresAt,
-    cancelUrl: site.cancelUrl,
+    cancelUrl: site.cancelUrl || IQIYI_CANCEL_URL,
     text: `${site.name}会员将于 ${record.expiresAt} 到期`,
   };
+}
+
+// Cancel page opens only from this sentence. No mention → no URL to open.
+export function cancelUrlForMention(mention) {
+  if (!mention) return '';
+  return mention.cancelUrl || IQIYI_CANCEL_URL;
 }
 
 // Current-page observation wins for loginMethod. A stored phone method
