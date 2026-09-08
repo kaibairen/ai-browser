@@ -150,14 +150,7 @@ export const FILL_SOURCE = `(selectors, values) => {
   };
   write(find(selectors.phone, 'input[type="tel"],input[name*="phone" i],input[placeholder*="手机"]'), values.phone, 'phone');
   write(find(selectors.username, 'input[type="text"],input[type="email"],input[name*="user" i]'), values.username, 'username');
-  let passwordEl = find(selectors.password, 'input[type="password"]');
-  if (!passwordEl && values.password) {
-    passwordEl = document.createElement('input');
-    passwordEl.type = 'password';
-    passwordEl.setAttribute('data-ai-browser', 'password');
-    passwordEl.setAttribute('autocomplete', 'off');
-    document.body.appendChild(passwordEl);
-  }
-  write(passwordEl, values.password, 'password');
+  const passwordEl = find(selectors.password, 'input[type="password"]');
+  if (passwordEl) write(passwordEl, values.password, 'password');
   return filled;
 }`;

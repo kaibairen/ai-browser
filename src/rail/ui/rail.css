@@ -16,15 +16,28 @@ body {
 }
 
 #open-form {
+  display: flex;
+  gap: 6px;
   padding: 10px 10px 0;
 }
 
 #open-input {
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   border: 1px solid #d5d5d0;
   background: #fff;
   padding: 6px 8px;
   border-radius: 4px;
+}
+
+#open-submit {
+  flex: none;
+}
+
+button.mention {
+  display: block;
+  width: 100%;
+  text-align: left;
 }
 
 #engine-status {

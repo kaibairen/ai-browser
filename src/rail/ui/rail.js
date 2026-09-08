@@ -39,7 +39,7 @@ function render(state) {
   const parts = [];
   if (state.mention) {
     parts.push(
-      `<article class="card mention" data-action="open-cancel">${escapeText(state.mention.text)}</article>`,
+      `<button type="button" class="card mention" data-action="open-cancel" onpointerdown="window.__aiOpenCancel(event)" onclick="window.__aiOpenCancel(event)">${escapeText(state.mention.text)}</button>`,
     );
   }
   if (state.proposal?.kind === 'save') {
@@ -83,7 +83,7 @@ function render(state) {
 }
 
 let opening = false;
-let composing = false;
+let canceling = false;
 
 async function submitOpen() {
   const value = input.value.trim();
@@ -96,32 +96,60 @@ async function submitOpen() {
   }
 }
 
-function isImeEnter(event) {
-  return Boolean(event.isComposing || composing || event.keyCode === 229);
+function isEnterKey(event) {
+  return (
+    event.key === 'Enter' ||
+    event.code === 'Enter' ||
+    event.code === 'NumpadEnter' ||
+    event.keyCode === 13
+  );
 }
 
-input.addEventListener('compositionstart', () => {
-  composing = true;
-});
-input.addEventListener('compositionend', () => {
-  composing = false;
-});
+window.__aiOpenCancel = (event) => {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  if (canceling) return;
+  canceling = true;
+  post('/open-cancel').finally(() => {
+    canceling = false;
+  });
+};
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   submitOpen();
 });
 
-input.addEventListener('keydown', (event) => {
-  if (event.key !== 'Enter') return;
-  if (isImeEnter(event)) return;
-  event.preventDefault();
-  submitOpen();
-});
+document.addEventListener(
+  'keydown',
+  (event) => {
+    if (!isEnterKey(event)) return;
+    if (event.target !== input) return;
+    if (!input.value.trim()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    submitOpen();
+  },
+  true,
+);
+
+document.addEventListener(
+  'pointerdown',
+  (event) => {
+    const button = event.target.closest('[data-action="open-cancel"]');
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    window.__aiOpenCancel(event);
+  },
+  true,
+);
 
 surface.addEventListener('click', async (event) => {
   const action = event.target.closest('[data-action]')?.dataset.action;
-  if (!action) return;
+  if (!action || action === 'open-cancel') return;
   if (action === 'confirm-save') {
     const card = surface.querySelector('[data-kind="save"]');
     const data = {};

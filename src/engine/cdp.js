@@ -229,18 +229,14 @@ export async function attachEngine(port, handlers) {
       return screen;
     },
     async navigate(url) {
+      await sendToPage('Page.navigate', { url });
       try {
-        await sendToPage('Page.navigate', { url });
-      } catch (error) {
-        if (!isCdpDisconnect(error) && pageSessionId) throw error;
-        pageSessionId = null;
-        if (closed) throw error;
-        const created = await Target.createTarget({ url });
-        const attached = await Target.attachToTarget({
-          targetId: created.targetId,
-          flatten: true,
+        await sendToPage('Runtime.evaluate', {
+          expression: `location.assign(${JSON.stringify(url)})`,
+          userGesture: true,
         });
-        await prepareSession(attached.sessionId, created.targetId);
+      } catch {
+        // Page.navigate is enough if evaluate is blocked.
       }
     },
     async waitForOrigin(url, timeoutMs) {
@@ -260,21 +256,9 @@ export async function attachEngine(port, handlers) {
     },
     async navigateAndWait(url, timeoutMs = 10000) {
       await this.navigate(url);
-      let reached = await this.waitForOrigin(url, 2500);
+      let reached = await this.waitForOrigin(url, 4000);
       if (reached) return reached;
-
-      pageSessionId = null;
-      const created = await Target.createTarget({ url });
-      try {
-        await Target.activateTarget({ targetId: created.targetId });
-      } catch {
-        // activateTarget is best-effort; attach still binds the new page.
-      }
-      const attached = await Target.attachToTarget({
-        targetId: created.targetId,
-        flatten: true,
-      });
-      await prepareSession(attached.sessionId, created.targetId);
+      await this.navigate(url);
       reached = await this.waitForOrigin(url, timeoutMs);
       if (reached) return reached;
       throw new Error(`engine did not reach ${url}`);

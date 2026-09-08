@@ -121,6 +121,9 @@ export async function startWorkspace() {
           await publish();
           return { ok: false, error: '没有可打开的取消页' };
         }
+        if (engine?.connected) {
+          await engine.navigate(cancelUrl);
+        }
         const opened = await openInEngine(cancelUrl);
         if (!originsMatch(cancelUrl, opened)) {
           await publish();
