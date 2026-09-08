@@ -53,7 +53,72 @@ export const OBSERVER_SOURCE = `(() => {
   send('frame-ready');
 })();`;
 
+// Current visible surface wins. Tab copy like 手机号登录 must not stick
+// when the page is showing 扫码 / a QR widget.
+export function resolveObservedLoginMethod({
+  text = '',
+  qrVisible = false,
+  phoneVisible = false,
+  passwordVisible = false,
+  phone = '',
+  username = '',
+} = {}) {
+  if (qrVisible || (!phoneVisible && !passwordVisible && /扫码登录|二维码登录|扫一扫/.test(text))) {
+    return 'qr';
+  }
+  if (/验证码|短信登录|手机号登录/.test(text)) return 'phone';
+  if (/密码登录|账号登录/.test(text)) return phone ? 'phone' : 'username';
+  if (/扫码登录|二维码/.test(text)) return 'qr';
+  if (phone) return 'phone';
+  if (username) return 'username';
+  return '';
+}
+
+// Observation already has loginMethod. Frames only fill gaps — never
+// replace a top-level method, and never invent a new field.
+export function mergeObservationSnapshots(top, frames = []) {
+  const merged = {
+    href: '',
+    phone: '',
+    username: '',
+    loginMethod: '',
+    passwordPresent: false,
+    passwordValue: '',
+    expiresAt: '',
+    loginForm: false,
+    ...(top || {}),
+    fields: { ...(top?.fields || {}) },
+  };
+
+  const takeIdentity = (child) => {
+    if (!child) return;
+    if (!merged.phone && child.phone) merged.phone = child.phone;
+    if (!merged.username && child.username) merged.username = child.username;
+    if (!merged.expiresAt && child.expiresAt) merged.expiresAt = child.expiresAt;
+    if (child.passwordPresent) merged.passwordPresent = true;
+    if (!merged.passwordValue && child.passwordValue) merged.passwordValue = child.passwordValue;
+    if (child.loginForm) merged.loginForm = true;
+    if (child.fields) merged.fields = { ...merged.fields, ...child.fields };
+  };
+
+  if (merged.loginMethod) {
+    for (const child of frames) takeIdentity(child);
+    return merged;
+  }
+
+  for (const child of frames) {
+    takeIdentity(child);
+    if (!child?.loginMethod) continue;
+    if (child.loginMethod === 'qr') merged.loginMethod = 'qr';
+    else if (!merged.loginMethod) merged.loginMethod = child.loginMethod;
+  }
+  if (merged.loginMethod === 'qr') merged.loginForm = true;
+  return merged;
+}
+
 export const SNAPSHOT_SOURCE = `(() => {
+  const resolveObservedLoginMethod = ${resolveObservedLoginMethod.toString()};
+
   const labelOf = (el) => [
     el.type || '',
     el.name || '',
@@ -70,6 +135,23 @@ export const SNAPSHOT_SOURCE = `(() => {
     return el.tagName.toLowerCase();
   };
 
+  const isVisible = (el) => {
+    if (!el || !el.getBoundingClientRect) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const box = el.getBoundingClientRect();
+    return box.width >= 32 && box.height >= 32 && box.bottom > 0 && box.right > 0;
+  };
+
+  const hintOf = (el) => [
+    el.className || '',
+    el.id || '',
+    el.alt || '',
+    el.title || '',
+    el.getAttribute('src') || '',
+    el.getAttribute('aria-label') || ''
+  ].join(' ').toLowerCase();
+
   const fields = {};
   const result = {
     href: location.href,
@@ -83,6 +165,9 @@ export const SNAPSHOT_SOURCE = `(() => {
     fields
   };
 
+  let phoneVisible = false;
+  let passwordVisible = false;
+
   for (const el of document.querySelectorAll('input, select, textarea')) {
     const type = String(el.type || '').toLowerCase();
     const label = labelOf(el);
@@ -93,12 +178,14 @@ export const SNAPSHOT_SOURCE = `(() => {
       result.passwordValue = value;
       fields.password = selectorOf(el);
       result.loginForm = true;
+      if (isVisible(el)) passwordVisible = true;
       continue;
     }
     if (type === 'tel' || /phone|mobile|tel|手机|电话/.test(label)) {
       result.phone = value || result.phone;
       fields.phone = selectorOf(el);
       result.loginForm = true;
+      if (isVisible(el)) phoneVisible = true;
       continue;
     }
     if (type === 'text' || type === 'email' || type === 'number' || type === '') {
@@ -110,22 +197,34 @@ export const SNAPSHOT_SOURCE = `(() => {
     }
   }
 
+  let qrVisible = false;
+  for (const el of document.querySelectorAll('img,canvas,svg,iframe,[class*="qr" i],[id*="qr" i],[class*="erweima" i],[id*="erweima" i]')) {
+    if (/qr|二维码|扫码|erweima|ewm/.test(hintOf(el)) && isVisible(el)) {
+      qrVisible = true;
+      break;
+    }
+  }
+
   const text = (document.body && document.body.innerText || '').slice(0, 20000);
-  if (/验证码|短信登录|手机号登录/.test(text)) result.loginMethod = result.loginMethod || 'phone';
-  if (/密码登录|账号登录/.test(text)) result.loginMethod = result.loginMethod || (result.phone ? 'phone' : 'username');
-  if (/扫码登录|二维码/.test(text)) result.loginMethod = result.loginMethod || 'qr';
-  if (result.phone && !result.loginMethod) result.loginMethod = 'phone';
-  if (result.username && !result.loginMethod) result.loginMethod = 'username';
+  result.loginMethod = resolveObservedLoginMethod({
+    text,
+    qrVisible,
+    phoneVisible,
+    passwordVisible,
+    phone: result.phone,
+    username: result.username,
+  });
+  if (result.loginMethod === 'qr') result.loginForm = true;
 
   const expiry =
-    text.match(/(?:到期|有效期|会员至|有效期至)[^\d]{0,6}(\d{4}[-./年]\d{1,2}[-./月]\d{1,2})/) ||
-    text.match(/(\d{4}[-./年]\d{1,2}[-./月]\d{1,2})[^\d]{0,4}到期/);
+    text.match(/(?:到期|有效期|会员至|有效期至)[^\\d]{0,6}(\\d{4}[-./年]\\d{1,2}[-./月]\\d{1,2})/) ||
+    text.match(/(\\d{4}[-./年]\\d{1,2}[-./月]\\d{1,2})[^\\d]{0,4}到期/);
   if (expiry) {
     result.expiresAt = expiry[1]
-      .replace(/年|月|\./g, '-')
+      .replace(/年|月|\\./g, '-')
       .replace(/日/g, '')
-      .replace(/-(\d)$/g, '-0$1')
-      .replace(/-(\d)-/g, '-0$1-');
+      .replace(/-(\\d)$/g, '-0$1')
+      .replace(/-(\\d)-/g, '-0$1-');
   }
 
   return result;
