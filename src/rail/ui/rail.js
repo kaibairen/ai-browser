@@ -82,21 +82,41 @@ function render(state) {
   surface.innerHTML = parts.join('');
 }
 
+let opening = false;
+let composing = false;
+
 async function submitOpen() {
   const value = input.value.trim();
-  if (!value) return;
-  await post('/open', { input: value });
+  if (!value || opening) return;
+  opening = true;
+  try {
+    await post('/open', { input: value });
+  } finally {
+    opening = false;
+  }
 }
 
-form.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  await submitOpen();
+function isImeEnter(event) {
+  return Boolean(event.isComposing || composing || event.keyCode === 229);
+}
+
+input.addEventListener('compositionstart', () => {
+  composing = true;
+});
+input.addEventListener('compositionend', () => {
+  composing = false;
 });
 
-input.addEventListener('keydown', async (event) => {
-  if (event.key !== 'Enter') return;
+form.addEventListener('submit', (event) => {
   event.preventDefault();
-  await submitOpen();
+  submitOpen();
+});
+
+input.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter') return;
+  if (isImeEnter(event)) return;
+  event.preventDefault();
+  submitOpen();
 });
 
 surface.addEventListener('click', async (event) => {

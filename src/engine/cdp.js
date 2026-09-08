@@ -17,16 +17,11 @@ function isUsablePage(info) {
   return !HIDDEN_PREFIXES.some((prefix) => url.startsWith(prefix));
 }
 
-function hostsMatch(expected, current) {
+export function originsMatch(expected, current) {
   try {
-    const want = new URL(expected);
-    const got = new URL(current);
-    const strip = (host) => host.replace(/^www\./, '').toLowerCase();
-    const a = strip(want.hostname);
-    const b = strip(got.hostname);
-    return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+    return new URL(expected).origin === new URL(current).origin;
   } catch {
-    return Boolean(current) && current.includes(expected);
+    return false;
   }
 }
 
@@ -248,21 +243,41 @@ export async function attachEngine(port, handlers) {
         await prepareSession(attached.sessionId, created.targetId);
       }
     },
-    async navigateAndWait(url, timeoutMs = 8000) {
-      await this.navigate(url);
+    async waitForOrigin(url, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
       let last = '';
       while (Date.now() < deadline) {
         if (closed) throw new Error('WebSocket connection closed');
         try {
           last = await this.currentUrl();
-          if (last && hostsMatch(url, last)) return last;
+          if (last && originsMatch(url, last)) return last;
         } catch (error) {
           if (isCdpDisconnect(error)) throw error;
         }
-        await new Promise((resolve) => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 150));
       }
-      return last || url;
+      return last;
+    },
+    async navigateAndWait(url, timeoutMs = 10000) {
+      await this.navigate(url);
+      let reached = await this.waitForOrigin(url, 2500);
+      if (reached) return reached;
+
+      pageSessionId = null;
+      const created = await Target.createTarget({ url });
+      try {
+        await Target.activateTarget({ targetId: created.targetId });
+      } catch {
+        // activateTarget is best-effort; attach still binds the new page.
+      }
+      const attached = await Target.attachToTarget({
+        targetId: created.targetId,
+        flatten: true,
+      });
+      await prepareSession(attached.sessionId, created.targetId);
+      reached = await this.waitForOrigin(url, timeoutMs);
+      if (reached) return reached;
+      throw new Error(`engine did not reach ${url}`);
     },
     async currentUrl() {
       const { frameTree } = await sendToPage('Page.getFrameTree');

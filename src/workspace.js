@@ -1,6 +1,6 @@
 import { locateEngineBinary } from './engine/locate.js';
 import { launchEngine, launchRailWindow } from './engine/launch.js';
-import { attachEngine, isCdpDisconnect } from './engine/cdp.js';
+import { attachEngine, isCdpDisconnect, originsMatch } from './engine/cdp.js';
 import { detectScreen } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
@@ -115,17 +115,21 @@ export async function startWorkspace() {
       },
 
       async openCancel() {
-        const mention = policy.peekMention() || policy.consumeMention();
+        const mention = policy.peekMention();
         const cancelUrl = mention?.cancelUrl;
         if (!cancelUrl) {
           await publish();
           return { ok: false, error: '没有可打开的取消页' };
         }
+        const opened = await openInEngine(cancelUrl);
+        if (!originsMatch(cancelUrl, opened)) {
+          await publish();
+          return { ok: false, error: `引擎仍在 ${opened}`, url: opened };
+        }
         policy.consumeMention();
         if (mention.siteKey && mention.expiresAt) {
           await store.markExpiryMentioned(mention.siteKey, mention.expiresAt);
         }
-        const opened = await openInEngine(cancelUrl);
         await publish();
         return { ok: true, url: opened };
       },
@@ -253,31 +257,28 @@ export async function startWorkspace() {
   }
 
   async function openInEngine(url) {
-    engineUrl = url;
     try {
       if (!engine?.connected || engineStatus === 'not-open') {
         await relaunchEngine(url);
+        const opened = await engine.waitForOrigin(url, 10000);
+        if (!originsMatch(url, opened)) {
+          const reached = await engine.navigateAndWait(url);
+          engineUrl = reached;
+        } else {
+          engineUrl = opened;
+        }
       } else {
-        const opened = await engine.navigateAndWait(url);
-        engineUrl = opened || url;
+        engineUrl = await engine.navigateAndWait(url);
         await engine.focusEngine();
       }
     } catch (error) {
       if (!isCdpDisconnect(error)) throw error;
       markNotOpen();
       await relaunchEngine(url);
+      engineUrl = await engine.navigateAndWait(url);
     }
-    if (!engine?.connected) {
-      await relaunchEngine(url);
-    }
-    try {
-      const current = await engine.currentUrl();
-      if (current) engineUrl = current;
-    } catch (error) {
-      if (isCdpDisconnect(error)) {
-        markNotOpen();
-        await relaunchEngine(url);
-      }
+    if (!originsMatch(url, engineUrl)) {
+      throw new Error(`engine stayed on ${engineUrl}`);
     }
     await publish();
     return engineUrl;
