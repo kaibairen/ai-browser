@@ -13,6 +13,7 @@ export function railProfileDir() {
   return join(dataRoot(), 'rail-profile');
 }
 
+// Site memory. Shared across Chrome/Edge. Never under engine-profile.
 export function storePath() {
   return join(dataRoot(), 'store.json');
 }
