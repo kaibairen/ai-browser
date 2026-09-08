@@ -1,0 +1,200 @@
+:root {
+  color-scheme: light;
+  font: 13px/1.45 system-ui, 'PingFang SC', 'Noto Sans CJK SC', sans-serif;
+  color: #2a2a28;
+  background: #ecece8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: #ecece8;
+}
+
+body {
+  min-height: 100vh;
+}
+
+#rail {
+  padding: 12px 12px 14px;
+}
+
+.rail-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.status {
+  flex: 1;
+  margin: 0;
+  color: #555;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+#collapse,
+#expand {
+  flex: none;
+  color: #444;
+}
+
+#open-form label {
+  display: block;
+  margin: 0 0 6px;
+  color: #444;
+  font-size: 12px;
+}
+
+.open-row {
+  display: flex;
+  gap: 6px;
+}
+
+#open-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid #d2d2cc;
+  background: #fff;
+  padding: 7px 10px;
+  border-radius: 8px;
+}
+
+#open-input:focus {
+  outline: 2px solid #c8c8c2;
+  outline-offset: 1px;
+}
+
+#open-submit {
+  flex: none;
+}
+
+#cancel-form {
+  padding: 10px 0 0;
+}
+
+#cancel-form[hidden] {
+  display: none;
+}
+
+#cancel-form #mention {
+  display: block;
+  width: 100%;
+  text-align: left;
+}
+
+#cancel-nav,
+#open-nav {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  left: -9999px;
+  border: 0;
+  opacity: 0;
+}
+
+#surface {
+  padding: 10px 0 0;
+}
+
+#surface:empty {
+  display: none;
+}
+
+.card {
+  background: #f7f7f3;
+  border: 1px solid #e4e4de;
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.card + .card {
+  margin-top: 8px;
+}
+
+.card > p:first-child {
+  margin: 0 0 10px;
+  color: #333;
+}
+
+label {
+  display: block;
+  margin: 0 0 8px;
+}
+
+label span {
+  display: block;
+  color: #666;
+  margin-bottom: 2px;
+}
+
+input[type='text'],
+input[type='date'],
+input[type='password'] {
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid #d5d5d0;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.row {
+  display: flex;
+  gap: 6px;
+}
+
+button {
+  border: 1px solid #c8c8c2;
+  background: #fff;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+
+button.primary {
+  border-color: #222;
+  background: #222;
+  color: #fff;
+}
+
+.mention {
+  cursor: pointer;
+}
+
+.muted {
+  color: #777;
+}
+
+.password {
+  letter-spacing: 0.2em;
+}
+
+body.collapsed #rail {
+  display: none;
+}
+
+body.collapsed #expand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 10px 4px;
+  border: 0;
+  border-radius: 0;
+  background: #ecece8;
+  writing-mode: vertical-rl;
+  letter-spacing: 0.18em;
+  font-size: 13px;
+  color: #333;
+}
+
+#expand[hidden] {
+  display: none;
+}
