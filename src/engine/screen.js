@@ -3,9 +3,18 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-export const RAIL_WIDTH = 280;
-export const RAIL_HEIGHT = 520;
+export const RAIL_WIDTH = 252;
+export const RAIL_HEIGHT = 248;
+export const RAIL_MENTION_HEIGHT = 340;
+export const RAIL_CONFIRM_HEIGHT = 460;
 export const RAIL_GAP = 16;
+export const RAIL_COLLAPSED_WIDTH = 40;
+export const RAIL_COLLAPSED_HEIGHT = 96;
+export const SCREEN_MARGIN = 16;
+// --window-size is the client area. Linux decorations and a title bar sit
+// outside that, which is why a 280px rail at x=1000 clipped on 1280.
+export const FRAME_SLACK_X = 28;
+export const FRAME_SLACK_Y = 48;
 
 export async function detectScreen() {
   const envWidth = Number(process.env.AI_BROWSER_SCREEN_WIDTH || 0);
@@ -48,22 +57,63 @@ export async function detectScreen() {
   return { width: 1440, height: 900 };
 }
 
+export function fitOuterBounds(bounds, screen) {
+  const width = Math.min(bounds.width, Math.max(40, screen.width - SCREEN_MARGIN * 2));
+  const height = Math.min(bounds.height, Math.max(80, screen.height - SCREEN_MARGIN * 2));
+  const left = Math.max(
+    SCREEN_MARGIN,
+    Math.min(bounds.left, screen.width - width - SCREEN_MARGIN),
+  );
+  const top = Math.max(
+    SCREEN_MARGIN,
+    Math.min(bounds.top, screen.height - height - SCREEN_MARGIN),
+  );
+  return { left, top, width, height };
+}
+
 export function engineBounds(screen) {
+  const railReserve = RAIL_WIDTH + RAIL_GAP + FRAME_SLACK_X + SCREEN_MARGIN;
   return {
     left: 0,
     top: 0,
-    width: Math.max(640, screen.width - RAIL_WIDTH - RAIL_GAP),
-    height: Math.max(480, screen.height),
+    width: Math.max(640, screen.width - railReserve),
+    height: Math.max(480, screen.height - FRAME_SLACK_Y),
   };
 }
 
-export function railBounds(screen) {
-  const width = Math.min(RAIL_WIDTH, Math.max(240, screen.width - 40));
-  const left = Math.max(0, Math.min(screen.width - width, engineBounds(screen).width + RAIL_GAP));
+function railBox(screen, width, height) {
+  const left = Math.max(
+    SCREEN_MARGIN,
+    screen.width - width - FRAME_SLACK_X - SCREEN_MARGIN,
+  );
+  const top = Math.max(SCREEN_MARGIN, Math.min(36, Math.round(screen.height * 0.05)));
+  return fitOuterBounds({ left, top, width, height }, screen);
+}
+
+export function railBounds(screen, extras = {}) {
+  return railBoundsFor(screen, extras);
+}
+
+export function railBoundsFor(screen, { collapsed = false, proposal = false, mention = false } = {}) {
+  if (collapsed) return collapsedRailBounds(screen);
+  const width = Math.min(RAIL_WIDTH, Math.max(220, screen.width - 80));
+  const height = proposal
+    ? Math.min(RAIL_CONFIRM_HEIGHT, Math.max(360, screen.height - 96))
+    : mention
+      ? Math.min(RAIL_MENTION_HEIGHT, Math.max(300, screen.height - 96))
+      : Math.min(RAIL_HEIGHT, Math.max(220, screen.height - 120));
+  return railBox(screen, width, height);
+}
+
+export function collapsedRailBounds(screen) {
+  return railBox(screen, RAIL_COLLAPSED_WIDTH, RAIL_COLLAPSED_HEIGHT);
+}
+
+export function commandLineBounds(outer) {
   return {
-    left,
-    top: Math.max(16, Math.min(48, Math.round(screen.height * 0.06))),
-    width,
-    height: Math.min(RAIL_HEIGHT, Math.max(320, screen.height - 64)),
+    left: outer.left,
+    top: outer.top,
+    width: Math.max(160, outer.width - 8),
+    height: Math.max(80, outer.height - 8),
   };
 }

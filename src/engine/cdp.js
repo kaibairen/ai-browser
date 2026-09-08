@@ -1,5 +1,5 @@
 import CDP from 'chrome-remote-interface';
-import { engineBounds } from './screen.js';
+import { engineBounds, fitOuterBounds } from './screen.js';
 import { FILL_SOURCE, OBSERVER_SOURCE, SNAPSHOT_SOURCE } from './observer.js';
 import { clickPath } from '../trace.js';
 
@@ -94,30 +94,75 @@ async function connectBrowser(port) {
   });
 }
 
-export async function placeWindow(port, bounds) {
-  const browser = await connectBrowser(port);
-  try {
-    const { targetInfos } = await browser.Target.getTargets();
-    const page = targetInfos.find((info) => info.type === 'page');
-    if (!page) return;
-    const { windowId } = await browser.Browser.getWindowForTarget({
-      targetId: page.targetId,
-    });
-    await browser.Browser.setWindowBounds({
-      windowId,
-      bounds: { windowState: 'normal' },
-    });
-    await browser.Browser.setWindowBounds({
-      windowId,
-      bounds: { ...bounds, windowState: 'normal' },
-    });
-  } finally {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function placeWindow(port, bounds, screen) {
+  const wanted = screen ? fitOuterBounds(bounds, screen) : { ...bounds };
+  let lastError = null;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const browser = await connectBrowser(port);
     try {
-      await browser.close();
-    } catch {
-      // Placement connection is disposable.
+      const { targetInfos } = await browser.Target.getTargets();
+      const page = targetInfos.find((info) => info.type === 'page');
+      if (!page) {
+        lastError = new Error('no page target for window placement');
+        await sleep(120);
+        continue;
+      }
+      const { windowId } = await browser.Browser.getWindowForTarget({
+        targetId: page.targetId,
+      });
+      await browser.Browser.setWindowBounds({
+        windowId,
+        bounds: { windowState: 'normal' },
+      });
+      await browser.Browser.setWindowBounds({
+        windowId,
+        bounds: {
+          left: wanted.left,
+          top: wanted.top,
+          width: wanted.width,
+          height: wanted.height,
+          windowState: 'normal',
+        },
+      });
+      const { bounds: actual } = await browser.Browser.getWindowBounds({ windowId });
+      if (screen) {
+        const width = actual.width || wanted.width;
+        const height = actual.height || wanted.height;
+        const overflowRight = (actual.left || 0) + width - screen.width;
+        const overflowBottom = (actual.top || 0) + height - screen.height;
+        if (overflowRight > 2 || overflowBottom > 2 || (actual.left || 0) < 0 || (actual.top || 0) < 0) {
+          wanted.left = Math.max(8, Math.min(wanted.left, screen.width - width - 8));
+          wanted.top = Math.max(8, Math.min(wanted.top, screen.height - height - 8));
+          if (width > screen.width - 16) wanted.width = Math.min(wanted.width, screen.width - 16);
+          if (height > screen.height - 16) wanted.height = Math.min(wanted.height, screen.height - 16);
+          await sleep(80);
+          continue;
+        }
+      }
+      const placed =
+        Math.abs((actual.left || 0) - wanted.left) <= 12 &&
+        Math.abs((actual.top || 0) - wanted.top) <= 12;
+      if (placed || attempt === 7) return actual;
+      await sleep(100);
+    } catch (error) {
+      lastError = error;
+      await sleep(120);
+    } finally {
+      try {
+        await browser.close();
+      } catch {
+        // Placement connection is disposable.
+      }
     }
   }
+
+  if (lastError) throw lastError;
+  return wanted;
 }
 
 export async function attachEngine(port, handlers) {

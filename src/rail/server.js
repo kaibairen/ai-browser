@@ -102,6 +102,14 @@ export function startRailServer({ getState, actions }) {
         return json(response, 200, await actions.dismissMention());
       }
 
+      if (request.method === 'POST' && url.pathname === '/rail-collapse') {
+        return json(response, 200, actions.collapseRail ? await actions.collapseRail() : { ok: true });
+      }
+
+      if (request.method === 'POST' && url.pathname === '/rail-expand') {
+        return json(response, 200, actions.expandRail ? await actions.expandRail() : { ok: true });
+      }
+
       const file =
         url.pathname === '/' ? 'index.html' : url.pathname.replace(/^\/+/, '');
       const path = resolve(UI_DIR, file);
@@ -110,7 +118,12 @@ export function startRailServer({ getState, actions }) {
         return response.end();
       }
       const data = await readFile(path);
-      response.writeHead(200, { 'content-type': TYPES[extname(path)] || 'text/plain' });
+      const headers = { 'content-type': TYPES[extname(path)] || 'text/plain' };
+      if (extname(path) === '.html' || url.pathname === '/') {
+        headers['content-language'] = 'zh-CN';
+        headers['cache-control'] = 'no-store';
+      }
+      response.writeHead(200, headers);
       return response.end(data);
     } catch (error) {
       return json(response, 500, { ok: false, error: error.message });

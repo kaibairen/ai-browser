@@ -1,11 +1,17 @@
 const surface = document.getElementById('surface');
 const form = document.getElementById('open-form');
 const input = document.getElementById('open-input');
-const engineStatus = document.getElementById('engine-status');
+const computerStatus = document.getElementById('computer-status');
 const cancelForm = document.getElementById('cancel-form');
 const cancelUrl = document.getElementById('cancel-url');
 const mentionButton = document.getElementById('mention');
+const collapseButton = document.getElementById('collapse');
+const expandButton = document.getElementById('expand');
 const DEFAULT_CANCEL = 'https://vip.iqiyi.com/viphelpdesk.html';
+
+let collapsed = false;
+let lastState = null;
+let lastBoxKey = '';
 
 async function post(path, body) {
   const response = await fetch(path, {
@@ -34,6 +40,76 @@ function field(name, label, value, type = 'text') {
   return `<label><span>${label}</span><input name="${name}" type="${type}" value="${escapeAttr(value)}" /></label>`;
 }
 
+function isBlankUrl(url) {
+  const value = String(url || '').trim();
+  return !value || value === 'about:blank' || value === 'about:newtab' || value.startsWith('chrome://newtab');
+}
+
+function computerLine(state) {
+  if (state.engine?.status === 'not-open') return '引擎未打开';
+  const url = state.engine?.url || '';
+  if (isBlankUrl(url)) return '这台电脑还是空白页。';
+  const name = String(state.engine?.site || '').trim();
+  if (name) return `这台电脑正在浏览 ${name}`;
+  try {
+    return `这台电脑正在浏览 ${new URL(url).hostname.replace(/^www\./, '')}`;
+  } catch {
+    return '这台电脑正在浏览该页';
+  }
+}
+
+function railBox(width, height) {
+  const margin = 16;
+  const slack = 28;
+  const availW = window.screen.availWidth || window.screen.width || 1280;
+  const availH = window.screen.availHeight || window.screen.height || 800;
+  const w = Math.min(width, Math.max(40, availW - margin * 2));
+  const h = Math.min(height, Math.max(80, availH - margin * 2));
+  const left = Math.max(margin, availW - w - slack - margin);
+  const top = Math.max(margin, Math.min(36, Math.round(availH * 0.05)));
+  return { left, top, width: w, height: h };
+}
+
+function shapeFor(state) {
+  if (collapsed) return railBox(40, 96);
+  if (state?.proposal) return railBox(252, 460);
+  if (state?.mention) return railBox(252, 340);
+  return railBox(252, 248);
+}
+
+function fitRailWindow(state, force = false) {
+  const box = shapeFor(state);
+  const key = `${collapsed ? 'c' : 'e'}:${box.left},${box.top},${box.width},${box.height}`;
+  if (!force && key === lastBoxKey) return;
+  lastBoxKey = key;
+  try {
+    window.resizeTo(box.width, box.height);
+    window.moveTo(box.left, box.top);
+  } catch {
+    // App windows usually allow this; CDP placement is the backup.
+  }
+}
+
+function releaseFocus() {
+  const active = document.activeElement;
+  if (active && active !== document.body && typeof active.blur === 'function') {
+    active.blur();
+  }
+  if (document.body && typeof document.body.focus === 'function') {
+    document.body.focus();
+  }
+}
+
+function setCollapsed(next) {
+  collapsed = Boolean(next);
+  document.body.classList.toggle('collapsed', collapsed);
+  if (expandButton) expandButton.hidden = !collapsed;
+  lastBoxKey = '';
+  fitRailWindow(lastState, true);
+  post(collapsed ? '/rail-collapse' : '/rail-expand').catch(() => {});
+  releaseFocus();
+}
+
 function renderMention(mention) {
   if (!cancelForm || !mentionButton || !cancelUrl) return;
   if (!mention) {
@@ -48,11 +124,8 @@ function renderMention(mention) {
 }
 
 function render(state) {
-  if (engineStatus) {
-    const closed = state.engine?.status === 'not-open';
-    engineStatus.hidden = !closed;
-    engineStatus.textContent = closed ? '引擎未打开' : '';
-  }
+  lastState = state;
+  if (computerStatus) computerStatus.textContent = computerLine(state);
   const parts = [];
   if (state.proposal?.kind === 'save') {
     const p = state.proposal;
@@ -88,10 +161,8 @@ function render(state) {
       </article>
     `);
   }
-  if (!parts.length) {
-    parts.push('<p class="muted"></p>');
-  }
   surface.innerHTML = parts.join('');
+  if (!collapsed) fitRailWindow(state);
 }
 
 let opening = false;
@@ -179,6 +250,14 @@ if (mentionButton) {
   mentionButton.addEventListener('click', submitCancel);
 }
 
+if (collapseButton) {
+  collapseButton.addEventListener('click', () => setCollapsed(true));
+}
+
+if (expandButton) {
+  expandButton.addEventListener('click', () => setCollapsed(false));
+}
+
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   submitOpen();
@@ -227,9 +306,25 @@ surface.addEventListener('click', async (event) => {
 });
 
 async function boot() {
+  document.body.tabIndex = -1;
+  let launchGuard = true;
+  input.addEventListener('pointerdown', () => {
+    launchGuard = false;
+  }, true);
+  input.addEventListener('focus', () => {
+    if (launchGuard) releaseFocus();
+  });
+  setTimeout(() => {
+    launchGuard = false;
+  }, 1000);
+  fitRailWindow(null, true);
+  releaseFocus();
   const state = await (await fetch('/state')).json();
   renderMention(state.mention);
   render(state);
+  releaseFocus();
+  requestAnimationFrame(releaseFocus);
+  setTimeout(releaseFocus, 200);
   const stream = new EventSource('/events');
   stream.onmessage = (event) => {
     const next = JSON.parse(event.data);

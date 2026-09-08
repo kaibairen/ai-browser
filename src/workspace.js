@@ -1,7 +1,7 @@
 import { locateEngineBinary } from './engine/locate.js';
 import { launchEngine, launchRailWindow } from './engine/launch.js';
-import { attachEngine, isCdpDisconnect, reachedExpectedPage } from './engine/cdp.js';
-import { detectScreen } from './engine/screen.js';
+import { attachEngine, isCdpDisconnect, placeWindow, reachedExpectedPage } from './engine/cdp.js';
+import { collapsedRailBounds, detectScreen, railBoundsFor } from './engine/screen.js';
 import { createSiteStore } from './store/site-store.js';
 import { createSessionPolicy } from './rail/policy.js';
 import { startRailServer } from './rail/server.js';
@@ -180,8 +180,30 @@ export async function startWorkspace() {
         await publish();
         return { ok: true };
       },
+
+      async collapseRail() {
+        return placeRail('collapse');
+      },
+
+      async expandRail() {
+        return placeRail('expand');
+      },
     },
   });
+
+  async function placeRail(kind = 'expand') {
+    if (!railWindow?.port) return { ok: false };
+    const state = getState();
+    const bounds =
+      kind === 'collapse'
+        ? collapsedRailBounds(screen)
+        : railBoundsFor(screen, {
+            proposal: Boolean(state.proposal),
+            mention: Boolean(state.mention),
+          });
+    await placeWindow(railWindow.port, bounds, screen);
+    return { ok: true };
+  }
 
   function markNotOpen() {
     engineStatus = 'not-open';
@@ -346,6 +368,10 @@ export async function startWorkspace() {
   }
   await ensureRail();
   if (engine?.connected) await engine.focusEngine();
+  setTimeout(() => {
+    engine?.focusEngine?.().catch(() => {});
+    placeRail('expand').catch(() => {});
+  }, 450);
   await publish();
 
   setInterval(() => {

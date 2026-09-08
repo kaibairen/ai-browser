@@ -1,24 +1,35 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" translate="no" class="notranslate">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>工作区</title>
+    <meta name="google" content="notranslate" />
+    <meta name="googlebot" content="notranslate" />
+    <title>左侧打开</title>
     <link rel="stylesheet" href="./rail.css" />
   </head>
   <body>
-    <iframe name="open-nav" id="open-nav" title="" tabindex="-1"></iframe>
-    <form id="open-form" method="POST" action="/open" target="open-nav" accept-charset="utf-8">
-      <input id="open-input" name="input" type="text" autocomplete="off" spellcheck="false" placeholder="打开页面" />
-      <button type="submit" id="open-submit">打开</button>
-    </form>
-    <p id="engine-status" class="muted" hidden></p>
-    <iframe name="cancel-nav" id="cancel-nav" title="" tabindex="-1"></iframe>
-    <form id="cancel-form" method="POST" action="/open-cancel" target="cancel-nav" accept-charset="utf-8" hidden>
-      <input type="hidden" name="url" id="cancel-url" value="https://vip.iqiyi.com/viphelpdesk.html" />
-      <button type="button" id="mention" class="card mention"></button>
-    </form>
-    <main id="surface"></main>
+    <div id="rail">
+      <header class="rail-bar">
+        <p id="computer-status" class="status">这台电脑还是空白页。</p>
+        <button type="button" id="collapse">收起</button>
+      </header>
+      <iframe name="open-nav" id="open-nav" title="" tabindex="-1"></iframe>
+      <form id="open-form" method="POST" action="/open" target="open-nav" accept-charset="utf-8" autocomplete="off">
+        <label for="open-input">输入后在左侧浏览窗口打开</label>
+        <div class="open-row">
+          <input id="open-input" name="input" type="text" autocomplete="off" spellcheck="false" placeholder="网址或站点名" />
+          <button type="submit" id="open-submit">打开</button>
+        </div>
+      </form>
+      <iframe name="cancel-nav" id="cancel-nav" title="" tabindex="-1"></iframe>
+      <form id="cancel-form" method="POST" action="/open-cancel" target="cancel-nav" accept-charset="utf-8" hidden>
+        <input type="hidden" name="url" id="cancel-url" value="https://vip.iqiyi.com/viphelpdesk.html" />
+        <button type="button" id="mention" class="card mention"></button>
+      </form>
+      <main id="surface"></main>
+    </div>
+    <button type="button" id="expand" hidden>展开</button>
     <script src="./rail.js"></script>
   </body>
 </html>
